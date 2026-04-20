@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "baseUrl": "./",
+    "paths": {
+      "@mintjobs/common": ["libs/common/src"],
+      "@mintjobs/common/*": ["libs/common/src/*"],
+      "@mintjobs/config": ["libs/config/src"],
+      "@mintjobs/config/*": ["libs/config/src/*"],
+      "@mintjobs/database": ["libs/database/src"],
+      "@mintjobs/database/*": ["libs/database/src/*"],
+      "@mintjobs/auth": ["libs/auth/src"],
+      "@mintjobs/auth/*": ["libs/auth/src/*"],
+      "@mintjobs/messaging": ["libs/messaging/src"],
+      "@mintjobs/messaging/*": ["libs/messaging/src/*"],
+      "@mintjobs/logger": ["libs/logger/src"],
+      "@mintjobs/logger/*": ["libs/logger/src/*"],
+      "@mintjobs/decorators": ["libs/decorators/src"],
+      "@mintjobs/decorators/*": ["libs/decorators/src/*"],
+      "@mintjobs/guards": ["libs/guards/src"],
+      "@mintjobs/guards/*": ["libs/guards/src/*"],
+      "@mintjobs/filters": ["libs/filters/src"],
+      "@mintjobs/filters/*": ["libs/filters/src/*"],
+      "@mintjobs/interceptors": ["libs/interceptors/src"],
+      "@mintjobs/interceptors/*": ["libs/interceptors/src/*"],
+      "@mintjobs/utils": ["libs/utils/src"],
+      "@mintjobs/utils/*": ["libs/utils/src/*"],
+      "@mintjobs/constants": ["libs/constants/src"],
+      "@mintjobs/constants/*": ["libs/constants/src/*"],
+      "@mintjobs/types": ["libs/types/src"],
+      "@mintjobs/types/*": ["libs/types/src/*"],
+      "@mintjobs/privy": ["libs/privy/src"],
+      "@mintjobs/privy/*": ["libs/privy/src/*"]
+    }
+  }
+}
