@@ -1,8 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConsumerService, RequestResponseService } from '@mintjobs/messaging';
+import { ConsumerService, RequestResponseService, PublisherService } from '@mintjobs/messaging';
 import { MessagePattern, QueueName } from '@mintjobs/constants';
 import { NotificationService } from './notification.service';
-import { NotificationGateway } from './notification.gateway';
 import { NotificationType } from './entities/notification.entity';
 
 @Injectable()
@@ -13,7 +12,7 @@ export class NotificationMessageHandler implements OnModuleInit {
     private readonly consumerService: ConsumerService,
     private readonly requestResponseService: RequestResponseService,
     private readonly notificationService: NotificationService,
-    private readonly gateway: NotificationGateway,
+    private readonly publisherService: PublisherService,
   ) {}
 
   async onModuleInit() {
@@ -106,7 +105,7 @@ export class NotificationMessageHandler implements OnModuleInit {
       await this.notificationService.markRead(notificationId, userId);
 
       const unread = await this.notificationService.unreadCount(userId);
-      this.gateway.pushUnreadCount(userId, unread);
+      void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_NOTIFICATION_UNREAD_COUNT, { userId, count: unread });
 
       await this.requestResponseService.respond(
         event.requestId,
@@ -129,7 +128,7 @@ export class NotificationMessageHandler implements OnModuleInit {
     try {
       const { userId } = event.data as any;
       await this.notificationService.markAllRead(userId);
-      this.gateway.pushUnreadCount(userId, 0);
+      void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_NOTIFICATION_UNREAD_COUNT, { userId, count: 0 });
 
       await this.requestResponseService.respond(
         event.requestId,
@@ -270,10 +269,10 @@ export class NotificationMessageHandler implements OnModuleInit {
   }) {
     try {
       const notification = await this.notificationService.create(dto);
-      this.gateway.pushToUser(dto.recipientId, notification);
+      void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_NOTIFICATION, { recipientId: dto.recipientId, notification });
 
       const unread = await this.notificationService.unreadCount(dto.recipientId);
-      this.gateway.pushUnreadCount(dto.recipientId, unread);
+      void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_NOTIFICATION_UNREAD_COUNT, { userId: dto.recipientId, count: unread });
     } catch (err) {
       this.logger.error(`Failed to send notification to ${dto.recipientId}`, err);
     }

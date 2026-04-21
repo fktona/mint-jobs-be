@@ -4,10 +4,8 @@ import { ConfigModule } from '@mintjobs/config';
 import { LoggerModule } from '@mintjobs/logger';
 import { DatabaseModule } from '@mintjobs/database';
 import { MessagingModule } from '@mintjobs/messaging';
-import { PrivyModule } from '@mintjobs/privy';
 import { Notification } from './entities/notification.entity';
 import { NotificationService } from './notification.service';
-import { NotificationGateway } from './notification.gateway';
 import { NotificationMessageHandler } from './notification.message-handler';
 
 @Module({
@@ -16,9 +14,8 @@ import { NotificationMessageHandler } from './notification.message-handler';
     LoggerModule,
     DatabaseModule,
     MessagingModule,
-    PrivyModule,
     TypeOrmModule.forFeature([Notification]),
   ],
-  providers: [NotificationService, NotificationGateway, NotificationMessageHandler],
+  providers: [NotificationService, NotificationMessageHandler],
 })
 export class AppModule {}

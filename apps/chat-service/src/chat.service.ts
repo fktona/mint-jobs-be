@@ -3,14 +3,13 @@ import {
   Logger,
   NotFoundException,
   ForbiddenException,
-  Inject,
-  forwardRef,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Conversation } from './entities/conversation.entity';
 import { Message, MessageType } from './entities/message.entity';
-import { ChatGateway } from './chat.gateway';
+import { PublisherService } from '@mintjobs/messaging';
+import { MessagePattern } from '@mintjobs/constants';
 
 @Injectable()
 export class ChatService {
@@ -21,8 +20,7 @@ export class ChatService {
     private readonly conversationRepo: Repository<Conversation>,
     @InjectRepository(Message)
     private readonly messageRepo: Repository<Message>,
-    @Inject(forwardRef(() => ChatGateway))
-    private readonly gateway: ChatGateway,
+    private readonly publisherService: PublisherService,
   ) {}
 
   // ─── Conversations ───────────────────────────────────────────────────────
@@ -60,8 +58,7 @@ export class ChatService {
       `You have been connected! You can now start chatting.`,
     );
 
-    // Notify both parties in real time
-    this.gateway.pushConversationCreated(conversation);
+    void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_CHAT_CONVERSATION_CREATED, { conversation });
 
     this.logger.log(
       `Created conversation ${conversation.id} between client ${clientId} and freelancer ${freelancerId}`,
@@ -133,21 +130,22 @@ export class ChatService {
 
     const saved = await this.messageRepo.save(message);
 
-    // Push message to both participants in real time
-    this.gateway.pushMessage(
-      conversation.clientId,
-      conversation.freelancerId,
+    void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_CHAT_MESSAGE, {
+      clientId: conversation.clientId,
+      freelancerId: conversation.freelancerId,
       conversationId,
-      saved,
-    );
+      message: saved,
+    });
 
-    // Push updated unread count to the recipient only
     const recipientId =
       senderId === conversation.clientId
         ? conversation.freelancerId
         : conversation.clientId;
     const recipientUnread = await this.unreadCount(recipientId);
-    this.gateway.pushUnreadCount(recipientId, recipientUnread);
+    void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_CHAT_UNREAD_COUNT, {
+      userId: recipientId,
+      count: recipientUnread,
+    });
 
     return saved;
   }
@@ -191,17 +189,18 @@ export class ChatService {
       .andWhere('is_read = false')
       .execute();
 
-    // Notify both sides so the sender sees the read receipt
-    this.gateway.pushRead(
-      conversation.clientId,
-      conversation.freelancerId,
+    void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_CHAT_READ, {
+      clientId: conversation.clientId,
+      freelancerId: conversation.freelancerId,
       conversationId,
-      userId,
-    );
+      readBy: userId,
+    });
 
-    // Push updated total unread count to the reader
     const count = await this.unreadCount(userId);
-    this.gateway.pushUnreadCount(userId, count);
+    void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_CHAT_UNREAD_COUNT, {
+      userId,
+      count,
+    });
   }
 
   /** Total unread messages across ALL conversations for a user */
@@ -247,13 +246,12 @@ export class ChatService {
       `Congratulations! You are now working together on "${jobTitle}".`,
     );
 
-    // Push the system message to both parties in real time
-    this.gateway.pushMessage(
-      conversation.clientId,
-      conversation.freelancerId,
-      conversation.id,
-      congrats,
-    );
+    void this.publisherService.publish(MessagePattern.GATEWAY_PUSH_CHAT_MESSAGE, {
+      clientId: conversation.clientId,
+      freelancerId: conversation.freelancerId,
+      conversationId: conversation.id,
+      message: congrats,
+    });
 
     this.logger.log(
       `PROPOSAL_HIRED: ensured conversation for client=${clientId} freelancer=${freelancerId} job=${jobId}`,

@@ -12,4 +12,5 @@ export enum QueueName {
   NOTIFICATION_QUEUE = 'notification.queue',
   CONTRACT_QUEUE = 'contract.queue',
   CHAT_QUEUE = 'chat.queue',
+  GATEWAY_QUEUE = 'gateway.push.queue',
 }

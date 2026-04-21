@@ -219,4 +219,12 @@ export enum MessagePattern {
   CHAT_MARK_READ_RESPONSE = 'chat.mark.read.response',
   CHAT_UNREAD_COUNT_RESPONSE = 'chat.unread.count.response',
 
+  // WebSocket push events (Services -> API Gateway push queue)
+  GATEWAY_PUSH_CHAT_MESSAGE = 'gateway.push.chat.message',
+  GATEWAY_PUSH_CHAT_READ = 'gateway.push.chat.read',
+  GATEWAY_PUSH_CHAT_CONVERSATION_CREATED = 'gateway.push.chat.conversation_created',
+  GATEWAY_PUSH_CHAT_UNREAD_COUNT = 'gateway.push.chat.unread_count',
+  GATEWAY_PUSH_NOTIFICATION = 'gateway.push.notification',
+  GATEWAY_PUSH_NOTIFICATION_UNREAD_COUNT = 'gateway.push.notification.unread_count',
+
 }

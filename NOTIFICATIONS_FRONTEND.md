@@ -26,16 +26,14 @@
 
 ## 1. How It Works
 
-Notifications are **in-app only** (no email, no push). They are persisted in the
-database and delivered in real time via Socket.IO.
+Notifications are **in-app only** (no email, no push). They are persisted in the database and delivered in real time via Socket.IO.
 
 | Layer | Purpose | When to use |
 |---|---|---|
-| **REST API** | Load notification history | Initial page load, pagination |
-| **Socket.IO** | Real-time delivery of new notifications | Everything live |
+| **REST API** | Load notification history, mark as read | Initial page load, pagination, actions |
+| **Socket.IO** | Real-time delivery of new notifications + unread count | Everything live |
 
-**The golden rule:** use REST to *load* history on mount, use Socket.IO to
-*receive* new notifications. Never poll REST.
+**The golden rule:** use REST to *load* history on mount, use Socket.IO to *receive* new notifications. Never poll REST.
 
 ### What triggers a notification
 
@@ -55,34 +53,35 @@ database and delivered in real time via Socket.IO.
 ```
 Frontend
   │
-  ├─── REST  ──────────────────► API Gateway :3000
+  ├─── REST  ──────────────────► API Gateway :3000/api/...
   │                                   │ RabbitMQ RPC
   │                                   ▼
-  │                         Notification Service :3006
+  │                         Notification Service (internal)
   │                                   │
   │                               PostgreSQL
   │
-  └─── Socket.IO ──────────────► Notification Service :3006
+  └─── Socket.IO ──────────────► API Gateway :3000/ws/notifications
+                                      │ RabbitMQ push events
+                                      ▲
+                            Notification Service (publishes push events)
 ```
 
-> The Socket.IO gateway runs **inside** the notification service on the same
-> port. It authenticates via the same Privy JWT and joins each user to a
-> private room (`user:<privyId>`).
+> Both REST and WebSocket run on the **same port** (API Gateway). The Socket.IO
+> gateway lives at namespace `/ws/notifications`. You only need one base URL
+> for your entire frontend.
 
 ---
 
 ## 3. REST API Reference
 
-**Base URL:** `https://your-api.example.com`
+**Base URL:** `https://your-api.example.com`  
 **Auth:** All endpoints require `Authorization: Bearer <privy-access-token>`
 
 ---
 
 ### `GET /notifications`
 
-Fetch paginated notifications for the authenticated user, newest first.
-The response also includes the current `unread` count so you can initialise
-the badge without a second request.
+Fetch paginated notifications for the authenticated user, newest first. The response also includes the current `unread` count so you can initialise the badge without a second request.
 
 **Query params:**
 
@@ -121,8 +120,7 @@ the badge without a second request.
 
 ### `GET /notifications/unread-count`
 
-Get just the unread notification count. Useful for nav-bar badge initialisation
-without loading the full list.
+Get just the unread notification count.
 
 **No query params.**
 
@@ -140,8 +138,7 @@ without loading the full list.
 
 ### `PATCH /notifications/:id/read`
 
-Mark a single notification as read. After this the server pushes an updated
-`notification:unread_count` via Socket.IO.
+Mark a single notification as read. The server then pushes an updated `notification:unread_count` via Socket.IO.
 
 **Path params:**
 
@@ -163,8 +160,7 @@ Mark a single notification as read. After this the server pushes an updated
 
 ### `PATCH /notifications/read-all`
 
-Mark **all** unread notifications as read. After this the server pushes
-`notification:unread_count` with `{ count: 0 }`.
+Mark **all** unread notifications as read. The server pushes `notification:unread_count` with `{ count: 0 }`.
 
 **No body or params.**
 
@@ -184,13 +180,12 @@ Mark **all** unread notifications as read. After this the server pushes
 
 ### Connection setup
 
-Connect once when the user logs in. Pass the Privy access token as a query
-parameter.
+The notification Socket.IO gateway runs on the **same port as the REST API** at namespace `/ws/notifications`.
 
 ```typescript
 import { io } from 'socket.io-client';
 
-const socket = io(process.env.NEXT_PUBLIC_NOTIFICATION_SOCKET_URL!, {
+const socket = io(`${process.env.NEXT_PUBLIC_API_URL}/ws/notifications`, {
   query: { token: privyAccessToken },
   transports: ['websocket'],
   reconnection: true,
@@ -199,8 +194,7 @@ const socket = io(process.env.NEXT_PUBLIC_NOTIFICATION_SOCKET_URL!, {
 });
 ```
 
-The server joins the authenticated user to `user:<privyId>` automatically.
-**You do not need to emit any join event.**
+The server joins the authenticated user to `user:<privyId>` automatically. **You do not need to emit any join event.**
 
 ---
 
@@ -214,7 +208,7 @@ The server joins the authenticated user to `user:<privyId>` automatically.
 
 ```typescript
 socket.on('notification', (payload: Notification) => {
-  // payload is the full saved Notification object
+  // full saved Notification object
 });
 ```
 
@@ -238,8 +232,7 @@ Add it to the top of your notification list and trigger a toast/banner.
 
 ---
 
-**`notification:unread_count`** — Server-pushed unread count update. Fires
-automatically after:
+**`notification:unread_count`** — Server-pushed unread count update. Fires after:
 - A new notification is created (to the recipient)
 - A single notification is marked read
 - All notifications are marked read (`count` will be `0`)
@@ -250,22 +243,13 @@ socket.on('notification:unread_count', (payload: { count: number }) => {
 });
 ```
 
-Payload:
-
-```json
-{ "count": 4 }
-```
-
-Never compute this client-side by counting socket events — always use this
-authoritative server push.
+Never compute this client-side — always use this authoritative server push.
 
 ---
 
 ### Authentication
 
-The server validates the `token` query parameter on every connection using
-Privy JWT verification. If the token expires, the socket will be disconnected.
-Reconnect with a fresh token:
+The server validates the `token` query parameter on every connection using Privy JWT verification. If the token expires, the socket will be disconnected. Reconnect with a fresh token:
 
 ```typescript
 socket.io.opts.query = { token: await getAccessToken() };
@@ -327,11 +311,7 @@ export interface ApiResponse<T> {
 
 ```typescript
 // lib/notifications-api.ts
-import type {
-  ApiResponse,
-  Notification,
-  NotificationListResult,
-} from '@/types/notifications';
+import type { ApiResponse, Notification, NotificationListResult } from '@/types/notifications';
 
 const BASE = process.env.NEXT_PUBLIC_API_URL ?? '';
 
@@ -342,11 +322,7 @@ export class NotificationApiError extends Error {
   }
 }
 
-async function notifFetch<T>(
-  path: string,
-  token: string,
-  init?: RequestInit,
-): Promise<T> {
+async function notifFetch<T>(path: string, token: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}/notifications/${path}`, {
     ...init,
     headers: {
@@ -357,56 +333,33 @@ async function notifFetch<T>(
   });
   const json: ApiResponse<T> = await res.json();
   if (!res.ok || !json.success) {
-    throw new NotificationApiError(
-      json.message ?? 'Notification request failed',
-      res.status,
-    );
+    throw new NotificationApiError(json.message ?? 'Notification request failed', res.status);
   }
   return json.data;
 }
 
-/** Fetch paginated notifications */
-export async function getNotifications(
-  token: string,
-  page = 1,
-  limit = 20,
-): Promise<NotificationListResult> {
-  const params = new URLSearchParams({
-    page: String(page),
-    limit: String(limit),
-  });
+export async function getNotifications(token: string, page = 1, limit = 20): Promise<NotificationListResult> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
   return notifFetch<NotificationListResult>(`?${params}`, token);
 }
 
-/** Get unread count only */
 export async function getUnreadCount(token: string): Promise<number> {
   const result = await notifFetch<{ count: number }>('unread-count', token);
   return result.count;
 }
 
-/** Mark a single notification as read */
-export async function markRead(
-  token: string,
-  notificationId: string,
-): Promise<void> {
-  await notifFetch<{ success: boolean }>(`${notificationId}/read`, token, {
-    method: 'PATCH',
-  });
+export async function markRead(token: string, notificationId: string): Promise<void> {
+  await notifFetch<{ success: boolean }>(`${notificationId}/read`, token, { method: 'PATCH' });
 }
 
-/** Mark all notifications as read */
 export async function markAllRead(token: string): Promise<void> {
-  await notifFetch<{ success: boolean }>('read-all', token, {
-    method: 'PATCH',
-  });
+  await notifFetch<{ success: boolean }>('read-all', token, { method: 'PATCH' });
 }
 ```
 
 ---
 
 ## 7. Socket.IO Client
-
-A singleton socket manager for notifications.
 
 ```typescript
 // lib/notification-socket.ts
@@ -430,7 +383,8 @@ class NotificationSocket {
   connect(token: string) {
     if (this.socket?.connected) return;
 
-    this.socket = io(process.env.NEXT_PUBLIC_NOTIFICATION_SOCKET_URL!, {
+    // Namespace /ws/notifications — same port as the REST API
+    this.socket = io(`${process.env.NEXT_PUBLIC_API_URL}/ws/notifications`, {
       query: { token },
       transports: ['websocket'],
       reconnection: true,
@@ -439,13 +393,7 @@ class NotificationSocket {
     });
 
     (
-      [
-        'notification',
-        'notification:unread_count',
-        'connect',
-        'disconnect',
-        'connect_error',
-      ] as const
+      ['notification', 'notification:unread_count', 'connect', 'disconnect', 'connect_error'] as const
     ).forEach((event) => {
       this.socket!.on(event as string, (payload: any) => {
         this.listeners.get(event)?.forEach((fn) => fn(payload));
@@ -464,13 +412,9 @@ class NotificationSocket {
   }
 
   on<K extends keyof EventMap>(event: K, listener: Listener<K>): () => void {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
-    }
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
     this.listeners.get(event)!.add(listener as Function);
-    return () => {
-      this.listeners.get(event)?.delete(listener as Function);
-    };
+    return () => this.listeners.get(event)?.delete(listener as Function);
   }
 
   get connected() {
@@ -534,12 +478,7 @@ export function useNotificationSocket() {
 // hooks/useNotifications.ts
 import { useState, useEffect, useCallback } from 'react';
 import { usePrivy } from '@privy-io/react-auth';
-import {
-  getNotifications,
-  markRead,
-  markAllRead,
-  NotificationApiError,
-} from '@/lib/notifications-api';
+import { getNotifications, markRead, markAllRead, NotificationApiError } from '@/lib/notifications-api';
 import { notificationSocket } from '@/lib/notification-socket';
 import type { Notification } from '@/types/notifications';
 
@@ -550,59 +489,39 @@ export function useNotifications() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(
-    async (page = 1) => {
-      try {
-        setLoading(true);
-        const token = await getAccessToken();
-        const result = await getNotifications(token!, page);
-        setNotifications((prev) =>
-          page === 1 ? result.data : [...prev, ...result.data],
-        );
-        setTotal(result.total);
-      } catch (err) {
-        setError(
-          err instanceof NotificationApiError
-            ? err.message
-            : 'Failed to load notifications',
-        );
-      } finally {
-        setLoading(false);
-      }
-    },
-    [getAccessToken],
-  );
+  const load = useCallback(async (page = 1) => {
+    try {
+      setLoading(true);
+      const token = await getAccessToken();
+      const result = await getNotifications(token!, page);
+      setNotifications((prev) => page === 1 ? result.data : [...prev, ...result.data]);
+      setTotal(result.total);
+    } catch (err) {
+      setError(err instanceof NotificationApiError ? err.message : 'Failed to load notifications');
+    } finally {
+      setLoading(false);
+    }
+  }, [getAccessToken]);
+
+  useEffect(() => { load(1); }, [load]);
 
   useEffect(() => {
-    load(1);
-  }, [load]);
-
-  // Prepend new notifications from socket
-  useEffect(() => {
-    const unsub = notificationSocket.on(
-      'notification',
-      (notif: Notification) => {
-        setNotifications((prev) => {
-          if (prev.some((n) => n.id === notif.id)) return prev;
-          return [notif, ...prev];
-        });
-        setTotal((t) => t + 1);
-      },
-    );
+    const unsub = notificationSocket.on('notification', (notif: Notification) => {
+      setNotifications((prev) => {
+        if (prev.some((n) => n.id === notif.id)) return prev;
+        return [notif, ...prev];
+      });
+      setTotal((t) => t + 1);
+    });
     return unsub;
   }, []);
 
-  const read = useCallback(
-    async (id: string) => {
-      const token = await getAccessToken();
-      if (!token) return;
-      await markRead(token, id);
-      setNotifications((prev) =>
-        prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)),
-      );
-    },
-    [getAccessToken],
-  );
+  const read = useCallback(async (id: string) => {
+    const token = await getAccessToken();
+    if (!token) return;
+    await markRead(token, id);
+    setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+  }, [getAccessToken]);
 
   const readAll = useCallback(async () => {
     const token = await getAccessToken();
@@ -611,15 +530,7 @@ export function useNotifications() {
     setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
   }, [getAccessToken]);
 
-  return {
-    notifications,
-    total,
-    loading,
-    error,
-    reload: load,
-    markRead: read,
-    markAllRead: readAll,
-  };
+  return { notifications, total, loading, error, reload: load, markRead: read, markAllRead: readAll };
 }
 ```
 
@@ -638,7 +549,6 @@ export function useUnreadCount() {
   const { getAccessToken, authenticated } = usePrivy();
   const [count, setCount] = useState(0);
 
-  // Fetch initial count from REST on mount
   useEffect(() => {
     if (!authenticated) return;
     getAccessToken().then((token) => {
@@ -646,12 +556,8 @@ export function useUnreadCount() {
     });
   }, [authenticated, getAccessToken]);
 
-  // Keep live via server push
   useEffect(() => {
-    const unsub = notificationSocket.on(
-      'notification:unread_count',
-      ({ count: c }) => setCount(c),
-    );
+    const unsub = notificationSocket.on('notification:unread_count', ({ count: c }) => setCount(c));
     return unsub;
   }, []);
 
@@ -690,28 +596,17 @@ export function NotificationBell() {
 
   return (
     <div className="relative">
-      <button
-        onClick={() => setOpen((o) => !o)}
-        className="relative p-2 rounded-full hover:bg-gray-100"
-        aria-label="Notifications"
-      >
-        {/* Bell SVG */}
+      <button onClick={() => setOpen((o) => !o)} className="relative p-2 rounded-full hover:bg-gray-100" aria-label="Notifications">
         <svg className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12
-               0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6
-               0v-1m6 0H9" />
+            d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 10-12 0v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
         </svg>
-
         {unread > 0 && (
-          <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center
-                           justify-center rounded-full bg-red-500 text-xs
-                           font-bold text-white">
+          <span className="absolute -top-1 -right-1 flex h-5 w-5 items-center justify-center rounded-full bg-red-500 text-xs font-bold text-white">
             {unread > 99 ? '99+' : unread}
           </span>
         )}
       </button>
-
       {open && <NotificationPanel onClose={() => setOpen(false)} />}
     </div>
   );
@@ -726,22 +621,10 @@ export function NotificationBell() {
 // components/NotificationPanel.tsx
 import { useEffect } from 'react';
 import { useNotifications } from '@/hooks/useNotifications';
-import { NotificationItem } from './NotificationItem';
 
-interface Props {
-  onClose: () => void;
-}
+export function NotificationPanel({ onClose }: { onClose: () => void }) {
+  const { notifications, loading, error, markRead, markAllRead } = useNotifications();
 
-export function NotificationPanel({ onClose }: Props) {
-  const {
-    notifications,
-    loading,
-    error,
-    markRead,
-    markAllRead,
-  } = useNotifications();
-
-  // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       const panel = document.getElementById('notification-panel');
@@ -752,37 +635,34 @@ export function NotificationPanel({ onClose }: Props) {
   }, [onClose]);
 
   return (
-    <div
-      id="notification-panel"
-      className="absolute right-0 top-12 z-50 w-80 rounded-xl border bg-white
-                 shadow-xl"
-    >
+    <div id="notification-panel" className="absolute right-0 top-12 z-50 w-80 rounded-xl border bg-white shadow-xl">
       <div className="flex items-center justify-between border-b px-4 py-3">
         <h3 className="font-semibold">Notifications</h3>
-        <button
-          onClick={markAllRead}
-          className="text-xs text-blue-500 hover:underline"
-        >
-          Mark all read
-        </button>
+        <button onClick={markAllRead} className="text-xs text-blue-500 hover:underline">Mark all read</button>
       </div>
-
       <div className="max-h-96 overflow-y-auto divide-y">
-        {loading && (
-          <p className="p-4 text-sm text-gray-400">Loading…</p>
-        )}
-        {error && (
-          <p className="p-4 text-sm text-red-500">{error}</p>
-        )}
-        {!loading && notifications.length === 0 && (
-          <p className="p-4 text-sm text-gray-400">No notifications yet.</p>
-        )}
+        {loading && <p className="p-4 text-sm text-gray-400">Loading…</p>}
+        {error && <p className="p-4 text-sm text-red-500">{error}</p>}
+        {!loading && notifications.length === 0 && <p className="p-4 text-sm text-gray-400">No notifications yet.</p>}
         {notifications.map((n) => (
-          <NotificationItem
+          <div
             key={n.id}
-            notification={n}
-            onRead={() => markRead(n.id)}
-          />
+            onClick={() => markRead(n.id)}
+            className={`flex cursor-pointer gap-3 px-4 py-3 hover:bg-gray-50 ${n.isRead ? 'opacity-60' : 'bg-blue-50'}`}
+          >
+            <div className="mt-1.5 flex-shrink-0">
+              {!n.isRead
+                ? <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
+                : <span className="inline-block h-2 w-2" />}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-gray-900">{n.title}</p>
+              <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{n.body}</p>
+              <p className="text-xs text-gray-400 mt-1">
+                {new Date(n.createdAt).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
+          </div>
         ))}
       </div>
     </div>
@@ -792,58 +672,7 @@ export function NotificationPanel({ onClose }: Props) {
 
 ---
 
-### NotificationItem
-
-```tsx
-// components/NotificationItem.tsx
-import type { Notification } from '@/types/notifications';
-
-interface Props {
-  notification: Notification;
-  onRead: () => void;
-}
-
-export function NotificationItem({ notification, onRead }: Props) {
-  const { title, body, isRead, createdAt } = notification;
-
-  return (
-    <div
-      onClick={onRead}
-      className={`flex cursor-pointer gap-3 px-4 py-3 hover:bg-gray-50
-                  ${isRead ? 'opacity-60' : 'bg-blue-50'}`}
-    >
-      {/* Unread dot */}
-      <div className="mt-1.5 flex-shrink-0">
-        {!isRead ? (
-          <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
-        ) : (
-          <span className="inline-block h-2 w-2 rounded-full bg-transparent" />
-        )}
-      </div>
-
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-medium text-gray-900">{title}</p>
-        <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{body}</p>
-        <p className="text-xs text-gray-400 mt-1">
-          {new Date(createdAt).toLocaleString([], {
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
-        </p>
-      </div>
-    </div>
-  );
-}
-```
-
----
-
 ### Toast on new notification
-
-Show a toast when a `notification` socket event fires while the user is on any
-page (not the notifications panel).
 
 ```tsx
 // hooks/useNotificationToast.ts
@@ -861,7 +690,7 @@ export function useNotificationToast() {
 }
 ```
 
-Mount this in your root layout alongside `useNotificationSocket`:
+Mount in root layout alongside `useNotificationSocket`:
 
 ```tsx
 // app/layout.tsx
@@ -875,8 +704,6 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
 ---
 
 ## 10. Notification Types Reference
-
-Each notification type may include `metadata` for routing to the relevant page.
 
 | `type` | Who receives | `metadata` shape | Suggested deep-link |
 |---|---|---|---|
@@ -897,21 +724,15 @@ Use `metadata` to build deep-links:
 function getNotificationHref(notif: Notification): string | null {
   const m = notif.metadata;
   switch (notif.type) {
-    case 'proposal.received':
-      return m?.jobId ? `/jobs/${m.jobId}/proposals` : null;
-    case 'proposal.hired':
-      return '/contracts';
+    case 'proposal.received':  return m?.jobId ? `/jobs/${m.jobId}/proposals` : null;
+    case 'proposal.hired':     return '/contracts';
     case 'escrow.funded':
-    case 'escrow.refunded':
-      return m?.jobId ? `/jobs/${m.jobId}` : null;
+    case 'escrow.refunded':    return m?.jobId ? `/jobs/${m.jobId}` : null;
     case 'escrow.released':
     case 'contract.created':
-    case 'contract.completed':
-      return '/contracts';
-    case 'chat.message':
-      return m?.conversationId ? `/chat?c=${m.conversationId}` : '/chat';
-    default:
-      return null;
+    case 'contract.completed': return '/contracts';
+    case 'chat.message':       return m?.conversationId ? `/chat?c=${m.conversationId}` : '/chat';
+    default:                   return null;
   }
 }
 ```
@@ -923,14 +744,8 @@ function getNotificationHref(notif: Notification): string | null {
 All REST errors follow:
 
 ```typescript
-interface ApiError {
-  success: false;
-  message: string;
-  statusCode: number;
-}
+interface ApiError { success: false; message: string; statusCode: number; }
 ```
-
-### Common errors
 
 | HTTP | `message` | What to do |
 |---|---|---|
@@ -938,19 +753,17 @@ interface ApiError {
 | 400 | `id must be a UUID` | Check the notification ID format |
 | 404 | `Notification not found` | Notification was deleted — reload list |
 
-### Socket.IO disconnects
+**Socket.IO disconnects:**
 
 ```typescript
 useEffect(() => {
   const unsub = notificationSocket.on('disconnect', (reason) => {
-    console.warn('Notification socket disconnected:', reason);
+    // Show reconnecting banner
   });
-  const unsubConnect = notificationSocket.on('connect', () => {
-    // Re-fetch unread count after reconnect to sync any
-    // notifications received while offline
-    getAccessToken().then((token) => {
-      if (token) getUnreadCount(token).then(setCount).catch(() => {});
-    });
+  const unsubConnect = notificationSocket.on('connect', async () => {
+    // Re-fetch unread count after reconnect to sync missed notifications
+    const token = await getAccessToken();
+    if (token) getUnreadCount(token).then(setCount).catch(() => {});
   });
   return () => { unsub(); unsubConnect(); };
 }, []);
@@ -961,17 +774,13 @@ useEffect(() => {
 ## 12. Environment Variables
 
 ```bash
-# REST API
-NEXT_PUBLIC_API_URL=https://your-api.example.com
-
-# Notification Socket.IO — points directly to the notification service
-# (port 3006 in dev)
-NEXT_PUBLIC_NOTIFICATION_SOCKET_URL=http://localhost:3006
+# REST API + WebSocket base URL (same server, single variable)
+NEXT_PUBLIC_API_URL=http://localhost:3000
 
 # Privy
 NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
 ```
 
-> In production, proxy the notification service through your load balancer and
-> set `NEXT_PUBLIC_NOTIFICATION_SOCKET_URL` to the public URL. The Socket.IO
-> handshake path is the default `/socket.io`.
+> Both the REST API and the Socket.IO gateway run on the same URL.
+> Notification socket connects to `{NEXT_PUBLIC_API_URL}/ws/notifications`.
+> In production just update `NEXT_PUBLIC_API_URL` to your domain — no separate socket URL needed.

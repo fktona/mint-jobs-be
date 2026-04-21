@@ -8,7 +8,6 @@ import { PrivyModule } from '@mintjobs/privy';
 import { Conversation } from './entities/conversation.entity';
 import { Message } from './entities/message.entity';
 import { ChatService } from './chat.service';
-import { ChatGateway } from './chat.gateway';
 import { ChatMessageHandler } from './chat.message-handler';
 
 @Module({
@@ -20,6 +19,6 @@ import { ChatMessageHandler } from './chat.message-handler';
     PrivyModule,
     TypeOrmModule.forFeature([Conversation, Message]),
   ],
-  providers: [ChatGateway, ChatService, ChatMessageHandler],
+  providers: [ChatService, ChatMessageHandler],
 })
 export class AppModule {}

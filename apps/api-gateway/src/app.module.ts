@@ -13,6 +13,9 @@ import { ContractsController } from './contracts/contracts.controller';
 import { EscrowController, MilestoneController, PlatformFeeController } from './escrow/escrow.controller';
 import { ChatController } from './chat/chat.controller';
 import { NotificationsController } from './notifications/notifications.controller';
+import { ChatGateway } from './gateways/chat.gateway';
+import { NotificationGateway } from './gateways/notification.gateway';
+import { GatewayPushHandler } from './gateways/gateway-push.handler';
 
 @Module({
   imports: [
@@ -22,6 +25,6 @@ import { NotificationsController } from './notifications/notifications.controlle
     PrivyModule,
   ],
   controllers: [UsersController, JobsController, FreelancerProfileController, ProposalsController, ClientProfileController, AuthController, ContractsController, EscrowController, MilestoneController, PlatformFeeController, ChatController, NotificationsController],
-  providers: [],
+  providers: [ChatGateway, NotificationGateway, GatewayPushHandler],
 })
 export class AppModule {}

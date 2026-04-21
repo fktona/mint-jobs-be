@@ -31,10 +31,10 @@ Chat is built on two layers:
 
 | Layer | Purpose | When to use |
 |---|---|---|
-| **REST API** | Load conversations and message history | Initial page load, pagination |
-| **Socket.IO** | Real-time events (new messages, read receipts) | Everything live |
+| **REST API** | Load conversations, send messages, mark read | Initial load; fallback |
+| **Socket.IO** | Send messages, mark read, receive real-time push events | Preferred for all writes + all incoming updates |
 
-**The golden rule:** use REST to *load* data, use Socket.IO to *receive* updates. Never poll the REST API for new messages.
+**The golden rule:** use Socket.IO for *sending* and *receiving* in real-time. Use REST only for initial data load or when the socket isn't connected. Never poll the REST API for new messages.
 
 ### Conversation lifecycle
 
@@ -48,19 +48,17 @@ Client hires freelancer
    "Congratulations! You are now working together on '<job title>'."
         │
         ▼
- Client or freelancer sends a message → REST POST /chat/messages
+ Client or freelancer sends a message → Socket chat:send_message (ack confirms save)
         │
         ▼
  Both parties receive it via Socket.IO  (chat:message event)
         │
         ▼
- Recipient opens conversation → REST PATCH /chat/messages/read
+ Recipient opens conversation → Socket chat:mark_read (ack confirms)
         │
         ▼
  Sender receives read receipt via Socket.IO  (chat:read event)
 ```
-
-A client can also initiate a conversation by sending the first message — this is handled automatically when posting to `POST /chat/messages` if the conversation already exists.
 
 ---
 
@@ -69,17 +67,22 @@ A client can also initiate a conversation by sending the first message — this 
 ```
 Frontend
   │
-  ├─── REST  ─────────────────► API Gateway :3000
+  ├─── REST  ─────────────────► API Gateway :3000/api/...
   │                                   │ RabbitMQ RPC
   │                                   ▼
-  │                             Chat Service :3008
+  │                             Chat Service (internal)
   │                                   │
   │                               PostgreSQL
   │
-  └─── Socket.IO ──────────────► Chat Service :3008  (same port, /socket.io path)
+  └─── Socket.IO ──────────────► API Gateway :3000/ws/chat
+                                      │ RabbitMQ push events
+                                      ▲
+                                Chat Service (publishes push events)
 ```
 
-> The Socket.IO gateway runs **inside** the chat service on the same port. It authenticates via the same Privy JWT and joins each user to a private room (`user:<privyId>`).
+> Both REST and WebSocket run on the **same port** (API Gateway). The Socket.IO
+> gateway lives at namespace `/ws/chat`. You only need one base URL for your
+> entire frontend.
 
 ---
 
@@ -92,7 +95,8 @@ Frontend
 
 ### `GET /chat/conversations`
 
-Fetch all conversations for the authenticated user (as client or freelancer), ordered by most recently updated. Each conversation includes a `latestMessage` preview.
+Fetch all conversations for the authenticated user (as client or freelancer),
+ordered by most recently updated. Each conversation includes a `latestMessage` preview.
 
 **No query params.**
 
@@ -126,7 +130,7 @@ Fetch all conversations for the authenticated user (as client or freelancer), or
 
 ### `GET /chat/messages`
 
-Fetch paginated messages for a conversation. Returns messages in **chronological order** (oldest first). Use `page` to load older history.
+Fetch paginated messages for a conversation. Returns messages in **chronological order** (oldest first).
 
 **Query params:**
 
@@ -206,7 +210,7 @@ Send a message in a conversation.
 }
 ```
 
-After a successful POST, the backend emits a `chat:message` Socket.IO event to both participants. **You do not need to add the message to state manually** — wait for the socket event to keep state consistent across devices.
+After a successful POST, the backend emits a `chat:message` Socket.IO event to both participants. **Do not add the message to state manually** — wait for the socket event.
 
 **Errors:**
 
@@ -221,7 +225,7 @@ After a successful POST, the backend emits a `chat:message` Socket.IO event to b
 
 ### `PATCH /chat/messages/read`
 
-Mark all unread messages **sent by the other party** in a conversation as read. Call this when the user opens or focuses a conversation.
+Mark all unread messages **sent by the other party** in a conversation as read.
 
 **Query params:**
 
@@ -238,13 +242,13 @@ Mark all unread messages **sent by the other party** in a conversation as read. 
 }
 ```
 
-After a successful PATCH, the backend emits a `chat:read` Socket.IO event to the other participant so they can update their sent-message read receipts. It also pushes an updated `chat:unread_count` to the user who called this endpoint.
+After a successful PATCH, the backend emits `chat:read` to the other participant and `chat:unread_count` to the caller.
 
 ---
 
 ### `GET /chat/unread-count`
 
-Get the **total** unread message count across all conversations for the authenticated user. Use this on page load to initialize the badge.
+Get the total unread message count across all conversations for the authenticated user.
 
 **No query params.**
 
@@ -263,12 +267,12 @@ Get the **total** unread message count across all conversations for the authenti
 
 ### Connection setup
 
-Connect once when the user logs in. Pass the Privy access token as a query parameter.
+The chat Socket.IO gateway runs on the **same port as the REST API** at namespace `/ws/chat`.
 
 ```typescript
 import { io, Socket } from 'socket.io-client';
 
-const socket = io(process.env.NEXT_PUBLIC_CHAT_SOCKET_URL!, {
+const socket = io(`${process.env.NEXT_PUBLIC_API_URL}/ws/chat`, {
   query: { token: privyAccessToken },
   transports: ['websocket'],
   autoConnect: true,
@@ -278,7 +282,9 @@ const socket = io(process.env.NEXT_PUBLIC_CHAT_SOCKET_URL!, {
 });
 ```
 
-The server joins the authenticated user to the room `user:<privyId>` automatically on connection. **You do not need to emit any join event.**
+The server joins the authenticated user to room `user:<privyId>` automatically. **You do not need to emit any join event.**
+
+---
 
 ### Events reference
 
@@ -290,11 +296,7 @@ The server joins the authenticated user to the room `user:<privyId>` automatical
 
 ```typescript
 socket.on('chat:message', (payload: ChatMessageEvent) => {
-  // payload shape:
-  // {
-  //   conversationId: string;
-  //   message: Message;        // full message object
-  // }
+  // { conversationId: string; message: Message }
 });
 ```
 
@@ -315,31 +317,17 @@ Payload:
 }
 ```
 
-Use this to append messages to the active conversation. Do **not** increment the unread badge manually — the server pushes an updated `chat:unread_count` automatically.
-
 ---
 
 **`chat:read`** — The other participant marked your messages as read.
 
 ```typescript
 socket.on('chat:read', (payload: ChatReadEvent) => {
-  // payload shape:
-  // {
-  //   conversationId: string;
-  //   readBy: string;   // Privy DID of the user who read
-  // }
+  // { conversationId: string; readBy: string }
 });
 ```
 
-Payload:
-```json
-{
-  "conversationId": "550e8400-...",
-  "readBy": "did:privy:abc123"
-}
-```
-
-Use this to show double-tick / "Seen" indicators on your sent messages.
+Use this to show double-tick / "Seen" indicators on sent messages.
 
 ---
 
@@ -347,54 +335,29 @@ Use this to show double-tick / "Seen" indicators on your sent messages.
 
 ```typescript
 socket.on('chat:conversation_created', (payload: ConversationCreatedEvent) => {
-  // payload shape:
-  // {
-  //   conversation: Conversation;
-  // }
+  // { conversation: Conversation }
 });
-```
-
-Payload:
-```json
-{
-  "conversation": {
-    "id": "550e8400-...",
-    "clientId": "did:privy:abc123",
-    "freelancerId": "did:privy:xyz789",
-    "jobId": "a1b2c3d4-...",
-    "proposalId": "d4c3b2a1-...",
-    "createdAt": "2026-04-15T10:00:00.000Z",
-    "updatedAt": "2026-04-15T10:00:00.000Z"
-  }
-}
 ```
 
 Add the conversation to your list when this fires.
 
 ---
 
-**`chat:unread_count`** — Server-pushed total unread count across **all** conversations. Fires automatically:
-- to the **recipient** after any new message arrives
-- to the **reader** after a successful mark-read
+**`chat:unread_count`** — Server-pushed total unread count. Fires automatically after every new message (to recipient) and after every mark-read (to reader).
 
 ```typescript
 socket.on('chat:unread_count', (payload: { count: number }) => {
-  // update global unread badge / nav indicator / tab title
+  // update global unread badge
 });
 ```
 
-Payload:
-```json
-{ "count": 7 }
-```
-
-Never compute this client-side from individual `chat:message` events — use this authoritative server push instead.
+Never compute this client-side — always use this authoritative server push.
 
 ---
 
 #### Outgoing events (client → server)
 
-Sending messages and marking read can go through the socket directly — lower latency than REST, no API Gateway hop. Both events use the **acknowledgement** pattern: pass a callback as the third argument to `socket.emit` and the server responds synchronously.
+These events use Socket.IO's acknowledgement pattern — the server processes the request via RabbitMQ RPC and returns a result in the ack callback.
 
 ---
 
@@ -404,15 +367,21 @@ Sending messages and marking read can go through the socket directly — lower l
 socket.emit(
   'chat:send_message',
   { conversationId: 'uuid', content: 'Hello!' },
-  (ack: { success: boolean; message?: Message; error?: string }) => {
-    if (!ack.success) console.error(ack.error);
-    // Do NOT add the message to state here — wait for the chat:message event
-    // which arrives for both sender and recipient through the same path.
-  },
+  (ack: { success: boolean; data?: Message; error?: string }) => {
+    if (!ack.success) {
+      console.error(ack.error);
+    }
+    // On success, the chat:message socket event will fire for both parties
+    // Do NOT add the message to state here — wait for chat:message
+  }
 );
 ```
 
-The server saves the message to DB, then broadcasts `chat:message` to both participants (including the sender). The ack only confirms the save succeeded.
+**Payload:**
+| Field | Type | Required |
+|---|---|---|
+| `conversationId` | UUID string | Yes |
+| `content` | string | Yes (non-empty) |
 
 ---
 
@@ -422,25 +391,25 @@ The server saves the message to DB, then broadcasts `chat:message` to both parti
 socket.emit(
   'chat:mark_read',
   { conversationId: 'uuid' },
-  (ack: { success: boolean; error?: string }) => {
-    if (!ack.success) console.error(ack.error);
-  },
+  (ack: { success: boolean; data?: any; error?: string }) => {
+    if (!ack.success) {
+      console.error(ack.error);
+    }
+    // Server emits chat:read to the other party and chat:unread_count to you
+  }
 );
 ```
 
-The server updates the DB, then broadcasts `chat:read` to both participants.
-
----
-
-> **REST vs Socket:** Both the REST endpoint (`POST /chat/messages`) and `chat:send_message` go through the same `ChatService.sendMessage()` — the result is identical. Use socket when connected (faster), REST as fallback when the socket is reconnecting.
+**Payload:**
+| Field | Type | Required |
+|---|---|---|
+| `conversationId` | UUID string | Yes |
 
 ---
 
 ### Authentication
 
-The Socket.IO server validates the `token` query parameter on every connection using the same Privy JWT verification as the REST guards.
-
-If the token expires while connected, the socket will be disconnected. Reconnect with a fresh token:
+The server validates the `token` query parameter on every connection using Privy JWT verification. If the token expires while connected, the socket will be disconnected. Reconnect with a fresh token:
 
 ```typescript
 socket.io.opts.query = { token: await getAccessToken() };
@@ -450,8 +419,6 @@ socket.connect();
 ---
 
 ## 5. TypeScript Types
-
-Copy these into your frontend project.
 
 ```typescript
 // types/chat.ts
@@ -495,7 +462,6 @@ export interface PaginatedMessages {
   totalPages: number;
 }
 
-// Socket.IO event payloads
 export interface ChatMessageEvent {
   conversationId: string;
   message: Message;
@@ -559,27 +525,20 @@ async function chatFetch<T>(
   return json.data;
 }
 
-/** Fetch all conversations for the current user */
 export async function getConversations(token: string): Promise<Conversation[]> {
   return chatFetch<Conversation[]>('conversations', token);
 }
 
-/** Fetch paginated messages for a conversation */
 export async function getMessages(
   token: string,
   conversationId: string,
   page = 1,
   limit = 30,
 ): Promise<PaginatedMessages> {
-  const params = new URLSearchParams({
-    conversationId,
-    page: String(page),
-    limit: String(limit),
-  });
+  const params = new URLSearchParams({ conversationId, page: String(page), limit: String(limit) });
   return chatFetch<PaginatedMessages>(`messages?${params}`, token);
 }
 
-/** Send a message */
 export async function sendMessage(
   token: string,
   conversationId: string,
@@ -591,11 +550,7 @@ export async function sendMessage(
   });
 }
 
-/** Mark all unread messages in a conversation as read */
-export async function markRead(
-  token: string,
-  conversationId: string,
-): Promise<void> {
+export async function markRead(token: string, conversationId: string): Promise<void> {
   await chatFetch<{ success: boolean }>(
     `messages/read?conversationId=${conversationId}`,
     token,
@@ -608,16 +563,10 @@ export async function markRead(
 
 ## 7. Socket.IO Client
 
-A singleton socket manager that the rest of your app subscribes to.
-
 ```typescript
 // lib/chat-socket.ts
 import { io, Socket } from 'socket.io-client';
-import type {
-  ChatMessageEvent,
-  ChatReadEvent,
-  ConversationCreatedEvent,
-} from '@/types/chat';
+import type { ChatMessageEvent, ChatReadEvent, ConversationCreatedEvent } from '@/types/chat';
 
 type EventMap = {
   'chat:message': ChatMessageEvent;
@@ -638,7 +587,8 @@ class ChatSocket {
   connect(token: string) {
     if (this.socket?.connected) return;
 
-    this.socket = io(process.env.NEXT_PUBLIC_CHAT_SOCKET_URL!, {
+    // Namespace /ws/chat — same port as the REST API
+    this.socket = io(`${process.env.NEXT_PUBLIC_API_URL}/ws/chat`, {
       query: { token },
       transports: ['websocket'],
       reconnection: true,
@@ -646,7 +596,6 @@ class ChatSocket {
       reconnectionDelay: 2000,
     });
 
-    // Forward all events to registered listeners
     (
       [
         'chat:message',
@@ -669,34 +618,26 @@ class ChatSocket {
     this.socket = null;
   }
 
-  /** Reconnect with a fresh token (e.g. after token expiry) */
   reconnect(token: string) {
     this.disconnect();
     this.connect(token);
   }
 
   on<K extends keyof EventMap>(event: K, listener: Listener<K>): () => void {
-    if (!this.listeners.has(event)) {
-      this.listeners.set(event, new Set());
-    }
+    if (!this.listeners.has(event)) this.listeners.set(event, new Set());
     this.listeners.get(event)!.add(listener as Function);
-
-    // Return an unsubscribe function
-    return () => {
-      this.listeners.get(event)?.delete(listener as Function);
-    };
+    return () => this.listeners.get(event)?.delete(listener as Function);
   }
 
   get connected() {
     return this.socket?.connected ?? false;
   }
 
-  /** Raw socket — use only for emit with ack callbacks */
+  /** Direct socket access for emit-with-ack calls */
   get rawSocket() {
     return this.socket;
   }
 }
-
 
 export const chatSocket = new ChatSocket();
 ```
@@ -707,7 +648,7 @@ export const chatSocket = new ChatSocket();
 
 ### `useChatSocket` — socket lifecycle
 
-Mount this once at the top of your app (e.g., inside a layout component) when the user is authenticated.
+Mount once at the top of your app when the user is authenticated.
 
 ```typescript
 // hooks/useChatSocket.ts
@@ -729,7 +670,6 @@ export function useChatSocket() {
       chatSocket.connect(token);
       connected.current = true;
 
-      // Refresh token on disconnect to handle expiry
       cleanup = chatSocket.on('disconnect', async (reason) => {
         if (reason === 'io server disconnect') {
           const fresh = await getAccessToken();
@@ -778,27 +718,19 @@ export function useConversations() {
     }
   }, [getAccessToken]);
 
-  useEffect(() => {
-    load();
-  }, [load]);
+  useEffect(() => { load(); }, [load]);
 
   // Update latest message preview on new message
   useEffect(() => {
     const unsub = chatSocket.on('chat:message', ({ conversationId, message }: ChatMessageEvent) => {
       setConversations((prev) =>
-        prev.map((c) =>
-          c.id === conversationId
-            ? {
-                ...c,
-                updatedAt: message.createdAt,
-                latestMessage: {
-                  content: message.content,
-                  senderId: message.senderId,
-                  createdAt: message.createdAt,
-                },
-              }
-            : c,
-        ).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+        prev
+          .map((c) =>
+            c.id === conversationId
+              ? { ...c, updatedAt: message.createdAt, latestMessage: { content: message.content, senderId: message.senderId, createdAt: message.createdAt } }
+              : c,
+          )
+          .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
       );
     });
     return unsub;
@@ -806,15 +738,12 @@ export function useConversations() {
 
   // Add newly created conversation to list
   useEffect(() => {
-    const unsub = chatSocket.on(
-      'chat:conversation_created',
-      ({ conversation }: ConversationCreatedEvent) => {
-        setConversations((prev) => {
-          if (prev.some((c) => c.id === conversation.id)) return prev;
-          return [{ ...conversation, latestMessage: null }, ...prev];
-        });
-      },
-    );
+    const unsub = chatSocket.on('chat:conversation_created', ({ conversation }: ConversationCreatedEvent) => {
+      setConversations((prev) => {
+        if (prev.some((c) => c.id === conversation.id)) return prev;
+        return [{ ...conversation, latestMessage: null }, ...prev];
+      });
+    });
     return unsub;
   }, []);
 
@@ -843,35 +772,28 @@ export function useMessages(conversationId: string) {
   const [error, setError] = useState<string | null>(null);
   const currentPage = useRef(1);
 
-  const loadPage = useCallback(
-    async (page = 1) => {
-      try {
-        setLoading(true);
-        const token = await getAccessToken();
-        const result = await getMessages(token!, conversationId, page);
-        const { data, ...meta } = result;
-
-        setMessages((prev) => (page === 1 ? data : [...data, ...prev]));
-        setPagination(meta);
-        currentPage.current = page;
-      } catch (err) {
-        setError(err instanceof ChatApiError ? err.message : 'Failed to load messages');
-      } finally {
-        setLoading(false);
-      }
-    },
-    [conversationId, getAccessToken],
-  );
+  const loadPage = useCallback(async (page = 1) => {
+    try {
+      setLoading(true);
+      const token = await getAccessToken();
+      const result = await getMessages(token!, conversationId, page);
+      const { data, ...meta } = result;
+      setMessages((prev) => (page === 1 ? data : [...data, ...prev]));
+      setPagination(meta);
+      currentPage.current = page;
+    } catch (err) {
+      setError(err instanceof ChatApiError ? err.message : 'Failed to load messages');
+    } finally {
+      setLoading(false);
+    }
+  }, [conversationId, getAccessToken]);
 
   // Initial load + mark as read
   useEffect(() => {
     if (!conversationId) return;
     loadPage(1);
-
-    getAccessToken().then((token) => {
-      if (token) markRead(token, conversationId).catch(() => {});
-    });
-  }, [conversationId, loadPage, getAccessToken]);
+    chatSocket.rawSocket?.emit('chat:mark_read', { conversationId });
+  }, [conversationId, loadPage]);
 
   // Receive new messages from socket
   useEffect(() => {
@@ -881,47 +803,34 @@ export function useMessages(conversationId: string) {
         if (prev.some((m) => m.id === message.id)) return prev;
         return [...prev, message];
       });
-
       // Auto-mark as read if this conversation is open
-      getAccessToken().then((token) => {
-        if (token) markRead(token, conversationId).catch(() => {});
-      });
+      chatSocket.rawSocket?.emit('chat:mark_read', { conversationId });
     });
     return unsub;
   }, [conversationId, getAccessToken]);
 
-  const send = useCallback(
-    async (content: string) => {
-      if (!content.trim()) return;
-      setSending(true);
-      setError(null);
-      try {
-        if (chatSocket.connected) {
-          // Prefer socket — lower latency, no API Gateway hop
-          await new Promise<void>((resolve, reject) => {
-            chatSocket.rawSocket!.emit(
-              'chat:send_message',
-              { conversationId, content: content.trim() },
-              (ack: { success: boolean; error?: string }) => {
-                if (ack.success) resolve();
-                else reject(new Error(ack.error ?? 'Failed to send message'));
-              },
-            );
-          });
-        } else {
-          // Fallback to REST when socket is reconnecting
-          const token = await getAccessToken();
-          await sendMessage(token!, conversationId, content);
-        }
-        // In both cases, the chat:message socket event adds the message to state
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to send message');
-      } finally {
-        setSending(false);
-      }
-    },
-    [conversationId, getAccessToken],
-  );
+  const send = useCallback(async (content: string) => {
+    if (!content.trim()) return;
+    setSending(true);
+    setError(null);
+    try {
+      await new Promise<void>((resolve, reject) => {
+        chatSocket.rawSocket?.emit(
+          'chat:send_message',
+          { conversationId, content: content.trim() },
+          (ack: { success: boolean; error?: string }) => {
+            if (ack.success) resolve();
+            else reject(new Error(ack.error ?? 'Failed to send'));
+          },
+        );
+      });
+      // chat:message socket event will add the message to state
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send message');
+    } finally {
+      setSending(false);
+    }
+  }, [conversationId]);
 
   const loadOlder = useCallback(() => {
     if (pagination && currentPage.current < pagination.totalPages) {
@@ -929,19 +838,21 @@ export function useMessages(conversationId: string) {
     }
   }, [pagination, loadPage]);
 
-  const hasMore = pagination
-    ? currentPage.current < pagination.totalPages
-    : false;
-
-  return { messages, loading, sending, error, send, loadOlder, hasMore };
+  return {
+    messages,
+    loading,
+    sending,
+    error,
+    send,
+    loadOlder,
+    hasMore: pagination ? currentPage.current < pagination.totalPages : false,
+  };
 }
 ```
 
 ---
 
 ### `useTotalUnreadCount` — global unread badge
-
-Use this for the nav-bar / tab-title unread indicator. The count is authoritative — it comes from the server, not from counting socket events locally.
 
 ```typescript
 // hooks/useTotalUnreadCount.ts
@@ -955,45 +866,24 @@ export function useTotalUnreadCount() {
   const { getAccessToken, authenticated } = usePrivy();
   const [count, setCount] = useState(0);
 
-  // Fetch initial count from REST on mount
   useEffect(() => {
     if (!authenticated) return;
     getAccessToken().then((token) => {
       if (!token) return;
-      fetch(`${BASE}/chat/unread-count`, {
-        headers: { Authorization: `Bearer ${token}` },
-      })
+      fetch(`${BASE}/chat/unread-count`, { headers: { Authorization: `Bearer ${token}` } })
         .then((r) => r.json())
         .then(({ data }) => setCount(data?.count ?? 0))
         .catch(() => {});
     });
   }, [authenticated, getAccessToken]);
 
-  // Keep live via socket push
   useEffect(() => {
-    const unsub = chatSocket.on('chat:unread_count', ({ count: c }) => {
-      setCount(c);
-    });
+    const unsub = chatSocket.on('chat:unread_count', ({ count: c }) => setCount(c));
     return unsub;
   }, []);
 
   return count;
 }
-```
-
-**Usage:**
-```tsx
-// In your layout / nav bar
-const unread = useTotalUnreadCount();
-
-<NavLink href="/chat">
-  Messages
-  {unread > 0 && (
-    <span className="ml-1 rounded-full bg-red-500 px-1.5 py-0.5 text-xs text-white">
-      {unread > 99 ? '99+' : unread}
-    </span>
-  )}
-</NavLink>
 ```
 
 ---
@@ -1026,19 +916,13 @@ export function ConversationList({ activeId, onSelect }: Props) {
     <ul className="divide-y">
       {conversations.map((conv) => {
         const otherId = conv.clientId === myId ? conv.freelancerId : conv.clientId;
-        const isActive = conv.id === activeId;
-
         return (
           <li
             key={conv.id}
             onClick={() => onSelect(conv.id)}
-            className={`flex items-start gap-3 p-4 cursor-pointer hover:bg-gray-50 ${
-              isActive ? 'bg-blue-50' : ''
-            }`}
+            className={`flex items-start gap-3 p-4 cursor-pointer hover:bg-gray-50 ${conv.id === activeId ? 'bg-blue-50' : ''}`}
           >
-            {/* Avatar placeholder */}
             <div className="h-10 w-10 rounded-full bg-gray-200 flex-shrink-0" />
-
             <div className="flex-1 min-w-0">
               <p className="text-sm font-medium truncate">{otherId}</p>
               {conv.latestMessage && (
@@ -1048,13 +932,9 @@ export function ConversationList({ activeId, onSelect }: Props) {
                 </p>
               )}
             </div>
-
             <span className="text-xs text-gray-400 flex-shrink-0">
               {conv.latestMessage
-                ? new Date(conv.latestMessage.createdAt).toLocaleTimeString([], {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })
+                ? new Date(conv.latestMessage.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : ''}
             </span>
           </li>
@@ -1076,22 +956,14 @@ import { useMessages } from '@/hooks/useMessages';
 import { usePrivy } from '@privy-io/react-auth';
 import type { Message } from '@/types/chat';
 
-interface Props {
-  conversationId: string;
-}
-
-export function MessageThread({ conversationId }: Props) {
-  const { messages, loading, sending, error, send, loadOlder, hasMore } =
-    useMessages(conversationId);
+export function MessageThread({ conversationId }: { conversationId: string }) {
+  const { messages, loading, sending, error, send, loadOlder, hasMore } = useMessages(conversationId);
   const { user } = usePrivy();
   const myId = user?.id ?? '';
   const [draft, setDraft] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
 
-  // Scroll to bottom on new messages
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages.length]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages.length]);
 
   async function handleSend() {
     if (!draft.trim()) return;
@@ -1099,43 +971,27 @@ export function MessageThread({ conversationId }: Props) {
     setDraft('');
   }
 
-  function handleKeyDown(e: React.KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
-    }
-  }
-
   return (
     <div className="flex flex-col h-full">
-      {/* Load older button */}
       {hasMore && (
         <div className="text-center py-2">
-          <button
-            onClick={loadOlder}
-            disabled={loading}
-            className="text-xs text-blue-500 hover:underline"
-          >
+          <button onClick={loadOlder} disabled={loading} className="text-xs text-blue-500 hover:underline">
             {loading ? 'Loading…' : 'Load older messages'}
           </button>
         </div>
       )}
-
-      {/* Message list */}
       <div className="flex-1 overflow-y-auto px-4 py-2 space-y-3">
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} isOwn={msg.senderId === myId} />
         ))}
         <div ref={bottomRef} />
       </div>
-
-      {/* Input */}
       {error && <p className="px-4 text-xs text-red-500">{error}</p>}
       <div className="flex items-end gap-2 p-4 border-t">
         <textarea
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={handleKeyDown}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
           rows={1}
           placeholder="Type a message…"
           className="flex-1 resize-none rounded-lg border p-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -1153,7 +1009,6 @@ export function MessageThread({ conversationId }: Props) {
 }
 
 function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean }) {
-  // System messages render centered
   if (message.type === 'system') {
     return (
       <div className="text-center">
@@ -1163,22 +1018,12 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
       </div>
     );
   }
-
   return (
     <div className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-xs rounded-2xl px-4 py-2 text-sm ${
-          isOwn
-            ? 'bg-blue-600 text-white rounded-br-sm'
-            : 'bg-gray-100 text-gray-900 rounded-bl-sm'
-        }`}
-      >
+      <div className={`max-w-xs rounded-2xl px-4 py-2 text-sm ${isOwn ? 'bg-blue-600 text-white rounded-br-sm' : 'bg-gray-100 text-gray-900 rounded-bl-sm'}`}>
         <p>{message.content}</p>
         <p className={`text-xs mt-1 ${isOwn ? 'text-blue-200' : 'text-gray-400'}`}>
-          {new Date(message.createdAt).toLocaleTimeString([], {
-            hour: '2-digit',
-            minute: '2-digit',
-          })}
+          {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           {isOwn && message.isRead && <span className="ml-1">✓✓</span>}
         </p>
       </div>
@@ -1189,7 +1034,7 @@ function MessageBubble({ message, isOwn }: { message: Message; isOwn: boolean })
 
 ---
 
-### ChatPage — full layout
+### ChatPage
 
 ```tsx
 // app/chat/page.tsx
@@ -1200,25 +1045,19 @@ import { MessageThread } from '@/components/chat/MessageThread';
 import { useChatSocket } from '@/hooks/useChatSocket';
 
 export default function ChatPage() {
-  useChatSocket(); // Connect once per page
+  useChatSocket();
   const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
 
   return (
     <div className="flex h-screen">
-      {/* Sidebar */}
       <div className="w-80 border-r flex flex-col">
         <div className="p-4 border-b">
           <h2 className="font-semibold text-lg">Messages</h2>
         </div>
         <div className="flex-1 overflow-y-auto">
-          <ConversationList
-            activeId={activeConversationId}
-            onSelect={setActiveConversationId}
-          />
+          <ConversationList activeId={activeConversationId} onSelect={setActiveConversationId} />
         </div>
       </div>
-
-      {/* Main thread */}
       <div className="flex-1">
         {activeConversationId ? (
           <MessageThread conversationId={activeConversationId} />
@@ -1237,16 +1076,14 @@ export default function ChatPage() {
 
 ## 10. Conversation Auto-Creation on Hire
 
-When a client hires a freelancer (both parties sign the proposal), the backend automatically:
+When a client hires a freelancer (both parties sign), the backend automatically:
 
 1. Creates a conversation linking `clientId` ↔ `freelancerId`
 2. Sends a system message: *"You have been connected! You can now start chatting."*
 3. Sends a job-specific message: *"Congratulations! You are now working together on '\<job title\>'."*
 4. Emits `chat:conversation_created` to both parties via Socket.IO
 
-**The frontend does not need to create conversations manually.** Just listen for `chat:conversation_created` in `useConversations` (already handled by the hook above) and the conversation will appear in both users' lists automatically.
-
-If a conversation already existed between the same client and freelancer, no duplicate is created — a new congratulations system message is appended to the existing thread instead.
+The frontend does not need to create conversations manually. `useConversations` handles `chat:conversation_created` automatically.
 
 ---
 
@@ -1254,14 +1091,8 @@ If a conversation already existed between the same client and freelancer, no dup
 
 All REST errors follow:
 ```typescript
-interface ApiError {
-  success: false;
-  message: string;
-  statusCode: number;
-}
+interface ApiError { success: false; message: string; statusCode: number; }
 ```
-
-### Common errors
 
 | HTTP | `message` | What to do |
 |---|---|---|
@@ -1269,20 +1100,17 @@ interface ApiError {
 | 400 | `conversationId must be a UUID` | Check the ID format |
 | 401 | `Missing authorization token` | Re-authenticate with Privy |
 | 403 | `Access denied to this conversation` | User is not a participant |
-| 404 | `Conversation not found` | Conversation ID is stale — reload list |
+| 404 | `Conversation not found` | Reload conversation list |
 
-### Socket.IO disconnects
-
-The socket can disconnect due to token expiry or network loss. The `ChatSocket` manager reconnects automatically, but you should handle the `disconnect` event in UI:
+**Socket.IO disconnects:**
 
 ```typescript
 useEffect(() => {
   const unsub = chatSocket.on('disconnect', (reason) => {
-    console.warn('Socket disconnected:', reason);
-    // Show a "Reconnecting…" banner if needed
+    // Show "Reconnecting…" banner if needed
   });
   const unsubConnect = chatSocket.on('connect', () => {
-    // Clear the banner
+    // Clear banner
   });
   return () => { unsub(); unsubConnect(); };
 }, []);
@@ -1292,17 +1120,14 @@ useEffect(() => {
 
 ## 12. Environment Variables
 
-Add these to your `.env.local` (Next.js) or equivalent:
-
 ```bash
-# REST API
-NEXT_PUBLIC_API_URL=https://your-api.example.com
-
-# Chat Socket.IO — points directly to the chat service (port 3008 in dev)
-NEXT_PUBLIC_CHAT_SOCKET_URL=http://localhost:3008
+# REST API + WebSocket base URL (same server, single variable)
+NEXT_PUBLIC_API_URL=http://localhost:3000
 
 # Privy
 NEXT_PUBLIC_PRIVY_APP_ID=your-privy-app-id
 ```
 
-> In production, proxy the chat service through your load balancer and set `NEXT_PUBLIC_CHAT_SOCKET_URL` to the public URL. The Socket.IO handshake path is the default `/socket.io`.
+> Both the REST API and the Socket.IO gateway run on the same URL.
+> Chat socket connects to `{NEXT_PUBLIC_API_URL}/ws/chat`.
+> In production just update `NEXT_PUBLIC_API_URL` to your domain — no separate socket URL needed.

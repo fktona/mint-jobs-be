@@ -7,9 +7,11 @@ import { ConfigService } from '@mintjobs/config';
 import { HttpExceptionFilter } from '@mintjobs/filters';
 import { LoggingInterceptor, TransformInterceptor } from '@mintjobs/interceptors';
 import { ValidationPipe as CustomValidationPipe } from '@mintjobs/common';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.useWebSocketAdapter(new IoAdapter(app));
   const configService = app.get(ConfigService);
 
   // Security
@@ -69,6 +71,8 @@ async function bootstrap() {
   await app.listen(port);
 
   console.log(`🚀 API Gateway running on: http://localhost:${port}`);
+  console.log(`💬 Chat WebSocket: ws://localhost:${port}/ws/chat`);
+  console.log(`🔔 Notification WebSocket: ws://localhost:${port}/ws/notifications`);
   if (configService.app.swaggerEnabled) {
     console.log(`📚 Swagger docs available at: http://localhost:${port}/api/docs`);
   }
