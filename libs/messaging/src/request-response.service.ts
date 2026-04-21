@@ -1,4 +1,4 @@
-import { Injectable, Logger, Inject, OnModuleInit, HttpException } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit, HttpException } from '@nestjs/common';
 import { MessagingService } from './messaging.service';
 import { MessagePattern, QueueName } from '@mintjobs/constants';
 import { RequestMessage, ResponseMessage } from '@mintjobs/types';
@@ -8,7 +8,7 @@ import { ConsumeMessage } from 'amqplib';
 interface PendingRequest {
   resolve: (value: ResponseMessage) => void;
   reject: (error: Error) => void;
-  timeout: NodeJS.Timeout;
+  timeoutHandle: ReturnType<typeof setTimeout>;
 }
 
 @Injectable()
@@ -18,6 +18,8 @@ export class RequestResponseService implements OnModuleInit {
   private readonly REQUEST_TIMEOUT = 30000; // 30 seconds
   private responseQueueSubscribed = false;
   private subscriptionPromise: Promise<void> | null = null;
+  /** Per-instance queue name — unique suffix prevents response-stealing between scaled gateway replicas */
+  private readonly instanceQueueName = `gateway.response.queue.${uuidv4()}`;
 
   constructor(private messagingService: MessagingService) {}
 
@@ -59,14 +61,18 @@ export class RequestResponseService implements OnModuleInit {
     return new Promise<TResponse>((resolve, reject) => {
       // Set up timeout
       const timeoutHandle = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        reject(new Error(`Request timeout for pattern: ${pattern}`));
+        const pending = this.pendingRequests.get(requestId);
+        if (pending) {
+          this.pendingRequests.delete(requestId);
+          reject(new Error(`Request timeout for pattern: ${pattern}`));
+        }
       }, timeout);
 
       // Store pending request
       this.pendingRequests.set(requestId, {
         resolve: (response: ResponseMessage) => {
           clearTimeout(timeoutHandle);
+          this.pendingRequests.delete(requestId);
           if (response.success) {
             resolve(response.data as TResponse);
           } else {
@@ -77,9 +83,10 @@ export class RequestResponseService implements OnModuleInit {
         },
         reject: (error: Error) => {
           clearTimeout(timeoutHandle);
+          this.pendingRequests.delete(requestId);
           reject(error);
         },
-        timeout: timeoutHandle,
+        timeoutHandle,
       });
 
       // Publish request
@@ -92,7 +99,7 @@ export class RequestResponseService implements OnModuleInit {
           persistent: true,
           timestamp: Date.now(),
           correlationId: correlationId || requestId,
-          replyTo: 'gateway.response.queue',
+          replyTo: this.instanceQueueName,
           messageId: requestId,
         });
 
@@ -151,11 +158,15 @@ export class RequestResponseService implements OnModuleInit {
     try {
       const channelWrapper = this.messagingService.getChannel();
       const exchange = this.messagingService.getExchange();
-      const responseQueue = 'gateway.response.queue';
+      const responseQueue = this.instanceQueueName;
 
-      // Assert response queue
+      // autoDelete: true — queue is deleted when this process disconnects,
+      // preventing orphaned queues from accumulating after restarts.
+      // exclusive: false — lets amqp-connection-manager reconnect to it.
       await channelWrapper.assertQueue(responseQueue, {
-        durable: true,
+        durable: false,
+        autoDelete: true,
+        exclusive: false,
       });
 
       // Bind to all response patterns

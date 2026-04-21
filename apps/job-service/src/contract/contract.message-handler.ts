@@ -121,14 +121,14 @@ export class ContractMessageHandler implements OnModuleInit {
   }
 
   private async handleJobCompleted(event: any): Promise<void> {
-    const { jobId } = event.data ?? {};
+    const { jobId, amountLamports } = event.data ?? {};
     if (!jobId) {
       this.logger.warn('JOB_COMPLETED missing jobId', event.data);
       return;
     }
     this.logger.log(`JOB_COMPLETED received — generating completion certificate for job ${jobId}`);
     try {
-      await this.contractService.completeByJobId(jobId);
+      await this.contractService.completeByJobId(jobId, amountLamports ?? null);
     } catch (err) {
       this.logger.error(`Failed to complete contract for job ${jobId}`, err);
       throw err; // nack → dead-letter

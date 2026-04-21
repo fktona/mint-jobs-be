@@ -15,10 +15,13 @@ import { RequestResponseService } from '@mintjobs/messaging';
 import { MessagePattern, QueueName } from '@mintjobs/constants';
 import { v4 as uuidv4 } from 'uuid';
 
+const _chatCorsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
+const _chatCorsOrigin = _chatCorsOrigins?.length ? _chatCorsOrigins : process.env.NODE_ENV === 'production' ? false : true;
+
 @WebSocketGateway({
   namespace: '/ws/chat',
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(',') ?? '*',
+    origin: _chatCorsOrigin,
     credentials: true,
   },
   transports: ['websocket', 'polling'],
@@ -97,6 +100,9 @@ export class ChatGateway
     const { conversationId, content } = payload ?? {};
     if (!conversationId || !content?.trim()) {
       return { success: false, error: 'conversationId and content are required' };
+    }
+    if (content.length > 10_000) {
+      return { success: false, error: 'Message too long (max 10 000 characters)' };
     }
 
     try {

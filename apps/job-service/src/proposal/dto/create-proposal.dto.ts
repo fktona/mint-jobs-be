@@ -30,5 +30,6 @@ export class CreateProposalDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(10000)
   coverLetter?: string;
 }

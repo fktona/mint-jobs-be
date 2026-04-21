@@ -9,10 +9,13 @@ import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { PrivyService } from '@mintjobs/privy';
 
+const _notifCorsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
+const _notifCorsOrigin = _notifCorsOrigins?.length ? _notifCorsOrigins : process.env.NODE_ENV === 'production' ? false : true;
+
 @WebSocketGateway({
   namespace: '/ws/notifications',
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(',') ?? '*',
+    origin: _notifCorsOrigin,
     credentials: true,
   },
   transports: ['websocket', 'polling'],

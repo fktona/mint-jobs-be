@@ -121,18 +121,19 @@ export class ProposalsController {
 
   @Get('job/:jobId/count')
   @ApiOperation({
-    summary: 'Get proposal count for a job',
+    summary: 'Get proposal count for a job (job owner only)',
     description: 'Returns total number of proposals and breakdown by status for a given job.',
   })
   @ApiParam({ name: 'jobId', description: 'Job ID' })
   async countJobProposals(
+    @PrivyUser('privyId') callerId: string,
     @Param('jobId') jobId: string,
     @Req() request: Request,
   ) {
     const correlationId = (request as any).correlationId;
     const data = await this.requestResponseService.request(
       MessagePattern.PROPOSAL_COUNT_BY_JOB,
-      { jobId },
+      { jobId, callerId },
       MessagePattern.PROPOSAL_COUNT_BY_JOB_RESPONSE,
       QueueName.PROPOSAL_QUEUE,
       correlationId,
@@ -142,10 +143,11 @@ export class ProposalsController {
 
   @Get('job/:jobId')
   @ApiOperation({
-    summary: 'Get all proposals for a job (client/job owner)',
+    summary: 'Get all proposals for a job (job owner only)',
   })
   @ApiParam({ name: 'jobId', description: 'Job ID' })
   async getJobProposals(
+    @PrivyUser('privyId') callerId: string,
     @Param('jobId') jobId: string,
     @Query() filter: FilterProposalDto,
     @Req() request: Request,
@@ -153,7 +155,7 @@ export class ProposalsController {
     const correlationId = (request as any).correlationId;
     const result = await this.requestResponseService.request<any, any>(
       MessagePattern.PROPOSAL_GET_BY_JOB,
-      { jobId, ...filter },
+      { jobId, callerId, ...filter },
       MessagePattern.PROPOSAL_GET_BY_JOB_RESPONSE,
       QueueName.PROPOSAL_QUEUE,
       correlationId,
@@ -192,16 +194,17 @@ export class ProposalsController {
   }
 
   @Get(':id')
-  @ApiOperation({ summary: 'Get proposal details by ID' })
+  @ApiOperation({ summary: 'Get proposal details by ID (applicant or job owner only)' })
   @ApiParam({ name: 'id', description: 'Proposal ID' })
   async getProposal(
+    @PrivyUser('privyId') callerId: string,
     @Param('id') proposalId: string,
     @Req() request: Request,
   ) {
     const correlationId = (request as any).correlationId;
     const data = await this.requestResponseService.request(
       MessagePattern.PROPOSAL_GET_ONE,
-      { proposalId },
+      { proposalId, callerId },
       MessagePattern.PROPOSAL_GET_ONE_RESPONSE,
       QueueName.PROPOSAL_QUEUE,
       correlationId,

@@ -5,10 +5,12 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@mintjobs/config';
-import { Role } from '@mintjobs/constants';
+import { timingSafeEqual } from 'crypto';
 
 /**
- * Guard that requires admin-token header for admin/super_admin roles
+ * Guard that requires a valid admin-token header.
+ * Applied on routes or controllers that need admin-only access.
+ * Works independently of PrivyGuard — does NOT rely on request.user.role.
  */
 @Injectable()
 export class AdminTokenGuard implements CanActivate {
@@ -16,18 +18,21 @@ export class AdminTokenGuard implements CanActivate {
 
   canActivate(context: ExecutionContext): boolean {
     const request = context.switchToHttp().getRequest();
-    const user = request.user;
+    const adminToken = request.headers['admin-token'] as string | undefined;
+    const expected = this.configService.admin.adminToken;
 
-    // Only check for admin/super_admin roles
-    if (user && (user.role === Role.ADMIN || user.role === Role.SUPER_ADMIN)) {
-      const adminToken = request.headers['admin-token'];
-      const expectedToken = this.configService.admin.adminToken;
+    if (!adminToken || !expected) {
+      throw new UnauthorizedException('Admin token required for admin operations');
+    }
 
-      if (!adminToken || adminToken !== expectedToken) {
-        throw new UnauthorizedException(
-          'Admin token required for admin operations',
-        );
+    try {
+      const a = Buffer.from(adminToken);
+      const b = Buffer.from(expected);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        throw new UnauthorizedException('Admin token required for admin operations');
       }
+    } catch {
+      throw new UnauthorizedException('Admin token required for admin operations');
     }
 
     return true;

@@ -7,6 +7,8 @@ import {
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, MoreThanOrEqual } from 'typeorm';
+import { PublicKey } from '@solana/web3.js';
+import { createPublicKey, verify as cryptoVerify } from 'crypto';
 import { Proposal, ProposalStatus } from './entities/proposal.entity';
 import { Job } from '../entities/job.entity';
 import { CreateProposalDto } from './dto/create-proposal.dto';
@@ -24,6 +26,29 @@ export class ProposalService {
     @InjectRepository(Job)
     private readonly jobRepository: Repository<Job>,
   ) {}
+
+  /**
+   * Verify a Solana ed25519 signature.
+   * @param walletAddress  Base58 Solana public key
+   * @param message        UTF-8 message that was signed
+   * @param signatureB64   Base64-encoded 64-byte ed25519 signature
+   */
+  private verifySolanaSignature(walletAddress: string, message: string, signatureB64: string): boolean {
+    try {
+      const pubkeyBytes = new PublicKey(walletAddress).toBytes();
+      // Wrap raw 32-byte ed25519 key in a SPKI DER envelope
+      const spki = Buffer.concat([
+        Buffer.from('302a300506032b6570032100', 'hex'),
+        pubkeyBytes,
+      ]);
+      const pubKey = createPublicKey({ key: spki, format: 'der', type: 'spki' });
+      const sig = Buffer.from(signatureB64, 'base64');
+      const msg = Buffer.from(message, 'utf8');
+      return cryptoVerify(null, msg, pubKey, sig);
+    } catch {
+      return false;
+    }
+  }
 
   async create(
     applicantId: string,
@@ -112,7 +137,11 @@ export class ProposalService {
     };
   }
 
-  async countByJob(jobId: string): Promise<{ total: number; byStatus: Record<string, number> }> {
+  async countByJob(jobId: string, callerId: string): Promise<{ total: number; byStatus: Record<string, number> }> {
+    const job = await this.jobRepository.findOne({ where: { id: jobId } });
+    if (!job) throw new NotFoundException('Job not found');
+    if (job.userId !== callerId) throw new ForbiddenException('Only the job owner can view proposal counts');
+
     const rows = await this.proposalRepository.manager.query(
       `SELECT status, COUNT(*) AS count FROM proposals WHERE job_id = $1::uuid GROUP BY status`,
       [jobId],
@@ -128,8 +157,13 @@ export class ProposalService {
 
   async findByJob(
     jobId: string,
+    callerId: string,
     filter: FilterProposalDto,
   ): Promise<PaginatedResponse<Proposal>> {
+    const job = await this.jobRepository.findOne({ where: { id: jobId } });
+    if (!job) throw new NotFoundException('Job not found');
+    if (job.userId !== callerId) throw new ForbiddenException('Only the job owner can view proposals');
+
     const { page = 1, limit = 20, status } = filter;
 
     const qb = this.proposalRepository
@@ -192,13 +226,18 @@ export class ProposalService {
     };
   }
 
-  async findById(proposalId: string): Promise<Proposal> {
+  async findById(proposalId: string, callerId: string): Promise<Proposal> {
     const proposal = await this.proposalRepository
       .createQueryBuilder('p')
       .leftJoinAndSelect('p.job', 'job')
       .where('p.id = :proposalId', { proposalId })
       .getOne();
     if (!proposal) throw new NotFoundException('Proposal not found');
+    const isApplicant = proposal.applicantId === callerId;
+    const isJobOwner = proposal.job?.userId === callerId;
+    if (!isApplicant && !isJobOwner) {
+      throw new ForbiddenException('Access denied to this proposal');
+    }
     return proposal;
   }
 
@@ -245,6 +284,10 @@ export class ProposalService {
       if (!dto.clientWallet || !dto.clientSignature) {
         throw new BadRequestException('clientWallet and clientSignature are required when hiring');
       }
+      const sigMessage = `MintJobs:hire:${proposalId}`;
+      if (!this.verifySolanaSignature(dto.clientWallet, sigMessage, dto.clientSignature)) {
+        throw new BadRequestException('Invalid client wallet signature');
+      }
       proposal.status = ProposalStatus.AWAITING_ACCEPTANCE;
       proposal.clientWallet = dto.clientWallet;
       proposal.clientSignature = dto.clientSignature;
@@ -274,6 +317,11 @@ export class ProposalService {
       throw new BadRequestException(
         `Proposal is not awaiting acceptance (current status: ${proposal.status})`,
       );
+    }
+
+    const sigMessage = `MintJobs:hire:${proposalId}`;
+    if (!this.verifySolanaSignature(freelancerWallet, sigMessage, freelancerSignature)) {
+      throw new BadRequestException('Invalid freelancer wallet signature');
     }
 
     proposal.status = ProposalStatus.HIRED;

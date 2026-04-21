@@ -44,13 +44,29 @@ export class ChatService {
       return { conversation: existing, created: false };
     }
 
+    // Use INSERT ... ON CONFLICT DO NOTHING to handle concurrent creation races.
+    // If another request raced us to the insert, re-fetch the existing row.
     const conversation = this.conversationRepo.create({
       clientId,
       freelancerId,
       jobId,
       proposalId,
     });
-    await this.conversationRepo.save(conversation);
+    await this.conversationRepo
+      .createQueryBuilder()
+      .insert()
+      .into('conversations')
+      .values(conversation)
+      .orIgnore()
+      .execute();
+
+    const saved = await this.conversationRepo.findOne({ where: { clientId, freelancerId } });
+    if (!saved) throw new Error('Failed to create or find conversation');
+
+    // If we lost the race, the conversation already existed — don't re-send welcome messages
+    if (saved.id !== conversation.id) {
+      return { conversation: saved, created: false };
+    }
 
     // Welcome system message
     await this.insertSystemMessage(
@@ -85,19 +101,16 @@ export class ChatService {
 
     const ids = conversations.map((c) => c.id);
 
-    // Fetch latest message per conversation
-    const latestMessages = await this.messageRepo
-      .createQueryBuilder('m')
-      .where('m.conversation_id IN (:...ids)', { ids })
-      .andWhere(
-        `m.created_at = (
-          SELECT MAX(m2.created_at) FROM messages m2
-          WHERE m2.conversation_id = m.conversation_id
-          AND m2.deleted_at IS NULL
-        )`,
-      )
-      .andWhere('m.deleted_at IS NULL')
-      .getMany();
+    // Fetch latest message per conversation using a single window-function query
+    const latestMessages: Message[] = await this.messageRepo.manager.query(
+      `SELECT DISTINCT ON (conversation_id)
+         id, conversation_id, sender_id, content, type, is_read, created_at, updated_at, deleted_at
+       FROM messages
+       WHERE conversation_id = ANY($1::uuid[])
+         AND deleted_at IS NULL
+       ORDER BY conversation_id, created_at DESC`,
+      [ids],
+    );
 
     const latestByConv = new Map(
       latestMessages.map((m) => [m.conversationId, m]),

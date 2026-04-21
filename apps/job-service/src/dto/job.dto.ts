@@ -10,6 +10,9 @@ import {
   Min,
   Max,
   ArrayMinSize,
+  ArrayMaxSize,
+  MaxLength,
+  IsIn,
 } from 'class-validator';
 
 export enum TimeWindow {
@@ -23,9 +26,12 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { PaymentType, ExperienceLevel, Milestone } from '../entities/job.entity';
 import { PaginationDto } from '@mintjobs/common';
 
+const VALID_CURRENCIES = ['sol', 'usd', 'eur', 'btc', 'eth', 'usdc', 'usdt'];
+
 export class MilestoneDto {
   @ApiProperty({ example: 'Design Phase', description: 'Milestone name' })
   @IsString()
+  @MaxLength(255)
   name: string;
 
   @ApiPropertyOptional({ example: 30, description: 'Duration in days (optional if dueDate is provided)' })
@@ -41,11 +47,13 @@ export class MilestoneDto {
 
   @ApiProperty({ example: 1000, description: 'Amount for this milestone (can be string or number)' })
   @IsString()
+  @MaxLength(50)
   amount: string;
 
   @ApiPropertyOptional({ example: 'Complete UI/UX design', description: 'Milestone description' })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   description?: string;
 }
 
@@ -62,12 +70,14 @@ export class PaymentDto {
   @Min(0)
   toAmount: number;
 
-  @ApiProperty({ example: 'sol', description: 'From currency', enum: ['sol', 'usd', 'eur', 'btc', 'eth'] })
+  @ApiProperty({ example: 'sol', description: 'From currency', enum: VALID_CURRENCIES })
   @IsString()
+  @IsIn(VALID_CURRENCIES)
   fromCurrency: string;
 
-  @ApiProperty({ example: 'sol', description: 'To currency', enum: ['sol', 'usd', 'eur', 'btc', 'eth'] })
+  @ApiProperty({ example: 'sol', description: 'To currency', enum: VALID_CURRENCIES })
   @IsString()
+  @IsIn(VALID_CURRENCIES)
   toCurrency: string;
 
   @ApiProperty({ enum: ['full-payment', 'milestone-payment'], example: 'milestone-payment', description: 'Payment type' })
@@ -83,6 +93,7 @@ export class PaymentDto {
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(50)
   @ValidateNested({ each: true })
   @Type(() => MilestoneDto)
   milestones?: MilestoneDto[];
@@ -92,24 +103,31 @@ export class CreateJobDto {
   // Frontend field names (matching CreateJobPayload)
   @ApiProperty({ example: 'Senior Frontend Developer', description: 'Job title' })
   @IsString()
+  @MaxLength(500)
   jobTitle: string;
 
   @ApiProperty({ example: 'We are looking for an experienced frontend developer...', description: 'Job description' })
   @IsString()
+  @MaxLength(10000)
   jobDescription: string;
 
   @ApiProperty({ example: 'Web Development', description: 'Job category' })
   @IsString()
+  @MaxLength(255)
   category: string;
 
   @ApiProperty({ example: ['React', 'TypeScript'], description: 'Required skills (max 5)', type: [String] })
   @IsArray()
+  @ArrayMaxSize(5)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   skills: string[];
 
   @ApiProperty({ example: ['English', 'Spanish'], description: 'Required languages (max 2)', type: [String] })
   @IsArray()
+  @ArrayMaxSize(2)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   languages: string[];
 
   @ApiProperty({ example: '2024-01-01T00:00:00.000Z', description: 'Start date as ISO string' })
@@ -122,6 +140,7 @@ export class CreateJobDto {
 
   @ApiProperty({ example: 'global', description: 'Job location' })
   @IsString()
+  @MaxLength(255)
   location: string;
 
   @ApiProperty({ description: 'Payment information', type: PaymentDto })
@@ -131,13 +150,15 @@ export class CreateJobDto {
 
   @ApiProperty({ example: 'beginner-level', description: 'Expertise level', enum: ['beginner-level', 'intermediate-level', 'expert-level'] })
   @IsString()
-  expertiseLevel: string; // 'beginner-level' | 'intermediate-level' | 'expert-level'
+  @IsIn(['beginner-level', 'intermediate-level', 'expert-level'])
+  expertiseLevel: string;
 
   @ApiPropertyOptional({ example: 1, description: 'Number of freelancers needed' })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(1)
+  @Max(100)
   freelancersCount?: number;
 }
 
@@ -145,16 +166,19 @@ export class UpdateJobDto {
   @ApiPropertyOptional({ example: 'Senior Frontend Developer', description: 'Job title' })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   title?: string;
 
   @ApiPropertyOptional({ example: 'We are looking for an experienced frontend developer...', description: 'Job description' })
   @IsOptional()
   @IsString()
+  @MaxLength(10000)
   description?: string;
 
   @ApiPropertyOptional({ example: 'Web Development', description: 'Job category' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   category?: string;
 
   @ApiPropertyOptional({ example: '2024-01-01', description: 'Start date (YYYY-MM-DD)' })
@@ -176,13 +200,17 @@ export class UpdateJobDto {
   @ApiPropertyOptional({ example: ['English', 'Spanish'], description: 'Required languages', type: [String] })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(2)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   languages?: string[];
 
   @ApiPropertyOptional({ example: ['React', 'TypeScript'], description: 'Required skills', type: [String] })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(5)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   skills?: string[];
 
   @ApiPropertyOptional({ example: 1, description: 'Number of freelancers needed' })
@@ -190,6 +218,7 @@ export class UpdateJobDto {
   @Type(() => Number)
   @IsNumber()
   @Min(1)
+  @Max(100)
   freelancersCount?: number;
 
   @ApiPropertyOptional({ example: 5000, description: 'Minimum pay range' })
@@ -218,6 +247,7 @@ export class UpdateJobDto {
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(50)
   @ValidateNested({ each: true })
   @Type(() => MilestoneDto)
   milestones?: MilestoneDto[];
@@ -225,6 +255,7 @@ export class UpdateJobDto {
   @ApiPropertyOptional({ example: 'global', description: 'Job location' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   location?: string;
 
   @ApiPropertyOptional({ enum: ExperienceLevel, example: ExperienceLevel.INTERMEDIATE, description: 'Experience level required' })
@@ -243,28 +274,35 @@ export class SaveDraftDto {
   @ApiPropertyOptional({ example: 'Senior Frontend Developer', description: 'Job title' })
   @IsOptional()
   @IsString()
+  @MaxLength(500)
   jobTitle?: string;
 
   @ApiPropertyOptional({ example: 'We are looking for an experienced frontend developer...', description: 'Job description' })
   @IsOptional()
   @IsString()
+  @MaxLength(10000)
   jobDescription?: string;
 
   @ApiPropertyOptional({ example: 'Web Development', description: 'Job category' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   category?: string;
 
   @ApiPropertyOptional({ example: ['React', 'TypeScript'], description: 'Required skills', type: [String] })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(5)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   skills?: string[];
 
   @ApiPropertyOptional({ example: ['English', 'Spanish'], description: 'Required languages', type: [String] })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(2)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   languages?: string[];
 
   @ApiPropertyOptional({ example: '2024-01-01T00:00:00.000Z', description: 'Start date as ISO string' })
@@ -280,6 +318,7 @@ export class SaveDraftDto {
   @ApiPropertyOptional({ example: 'global', description: 'Job location' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   location?: string;
 
   @ApiPropertyOptional({ description: 'Payment information', type: PaymentDto })
@@ -291,6 +330,7 @@ export class SaveDraftDto {
   @ApiPropertyOptional({ example: 'beginner-level', description: 'Expertise level', enum: ['beginner-level', 'intermediate-level', 'expert-level'] })
   @IsOptional()
   @IsString()
+  @IsIn(['beginner-level', 'intermediate-level', 'expert-level'])
   expertiseLevel?: string;
 
   @ApiPropertyOptional({ example: 1, description: 'Number of freelancers needed' })
@@ -298,6 +338,7 @@ export class SaveDraftDto {
   @Type(() => Number)
   @IsNumber()
   @Min(1)
+  @Max(100)
   freelancersCount?: number;
 }
 
@@ -309,6 +350,7 @@ export class FilterJobDto extends PaginationDto {
   @ApiPropertyOptional({ example: 'Web Development', description: 'Filter by category' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   category?: string;
 
   @ApiPropertyOptional({ enum: ExperienceLevel, example: ExperienceLevel.INTERMEDIATE, description: 'Filter by experience level' })
@@ -319,6 +361,7 @@ export class FilterJobDto extends PaginationDto {
   @ApiPropertyOptional({ example: 'global', description: 'Filter by location' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   location?: string;
 
   @ApiPropertyOptional({ example: 5000, description: 'Minimum pay range filter' })

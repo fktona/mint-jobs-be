@@ -4,6 +4,8 @@ import {
   IsArray,
   MaxLength,
   ValidateNested,
+  ArrayMaxSize,
+  IsUrl,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { ApiPropertyOptional, PartialType } from '@nestjs/swagger';
@@ -12,16 +14,19 @@ export class ProjectItemDto {
   @ApiPropertyOptional({ description: 'Project title' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   name?: string;
 
   @ApiPropertyOptional({ description: 'What the user did on the project' })
   @IsOptional()
   @IsString()
+  @MaxLength(255)
   role?: string;
 
   @ApiPropertyOptional({ description: 'Project URL' })
   @IsOptional()
-  @IsString()
+  @IsUrl()
+  @MaxLength(500)
   link?: string;
 }
 
@@ -38,6 +43,7 @@ export class CreateFreelancerProfileDto {
   })
   @IsOptional()
   @IsString()
+  @MaxLength(5000)
   professionalSummary?: string;
 
   @ApiPropertyOptional({
@@ -50,13 +56,15 @@ export class CreateFreelancerProfileDto {
   category?: string;
 
   @ApiPropertyOptional({
-    description: 'Selected skills — any labels, max 5 recommended by UI',
+    description: 'Selected skills — any labels, max 20',
     example: ['Solidity', 'Foundry', 'React'],
     type: [String],
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(20)
   @IsString({ each: true })
+  @MaxLength(100, { each: true })
   selectedSkills?: string[];
 
   @ApiPropertyOptional({
@@ -73,7 +81,7 @@ export class CreateFreelancerProfileDto {
     example: 'https://example.com/portfolio',
   })
   @IsOptional()
-  @IsString()
+  @IsUrl()
   @MaxLength(500)
   portfolioLink?: string;
 
@@ -96,11 +104,12 @@ export class CreateFreelancerProfileDto {
   resumeUrl?: string;
 
   @ApiPropertyOptional({
-    description: 'Proof-of-work projects',
+    description: 'Proof-of-work projects (max 20)',
     type: [ProjectItemDto],
   })
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(20)
   @ValidateNested({ each: true })
   @Type(() => ProjectItemDto)
   projects?: ProjectItemDto[];

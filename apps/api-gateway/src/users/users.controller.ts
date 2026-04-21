@@ -104,7 +104,7 @@ export class UsersController {
 
   @Get()
   @UseGuards(RolesGuard)
-  // @Roles(Role.ADMIN, Role.SUPER_ADMIN)
+  @Roles(Role.ADMIN, Role.SUPER_ADMIN)
   @ApiOperation({
     summary: 'Get all users (Admin/Super Admin only)',
     description: 'Returns a paginated list of all users in the database with optional filters. Only accessible by admin or super_admin roles.',

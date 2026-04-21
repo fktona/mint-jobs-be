@@ -47,6 +47,12 @@ interface OnChainEscrow {
 @Injectable()
 export class EscrowService {
   private readonly logger = new Logger(EscrowService.name);
+
+  private safePublish(pattern: any, data: Record<string, unknown>): void {
+    this.publisherService.publish(pattern, data).catch((err) =>
+      this.logger.warn(`Failed to publish ${pattern}`, err),
+    );
+  }
   private readonly connection: Connection;
   private readonly programId: PublicKey;
   private readonly authority: Keypair | null = null;
@@ -336,8 +342,8 @@ export class EscrowService {
         { jobId, clientId, clientWallet, escrowPda: escrowPda.toBase58(), vaultPda: vaultPda.toBase58(), amountLamports: amountLamports.toString(), platformFeeLamports: platformFeeLamports.toString(), status: EscrowStatus.FUNDED, freelancerId: null, freelancerWallet: null, txSignature: sig },
         ['jobId'],
       );
-      void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: true });
-      void this.publisherService.publish(MessagePattern.ESCROW_FUNDED, { jobId, clientId, amountLamports: amountLamports.toString() });
+      this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: true });
+      this.safePublish(MessagePattern.ESCROW_FUNDED, { jobId, clientId, amountLamports: amountLamports.toString() });
       return { txSignature: sig, escrowPda: escrowPda.toBase58(), vaultPda: vaultPda.toBase58() };
     }
 
@@ -476,7 +482,7 @@ export class EscrowService {
       const sig = await this.signAndBroadcast(tx, walletId, userJwt);
       this.logger.log(`Escrow withdrawn (server) for job ${jobId} | sig: ${sig}`);
       await this.escrowRepository.update({ jobId }, { status: EscrowStatus.REFUNDED, txSignature: sig });
-      void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: false });
+      this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: false });
       return { txSignature: sig };
     }
 
@@ -550,9 +556,9 @@ export class EscrowService {
       const sig = await this.signAndBroadcast(tx, walletId, userJwt);
       this.logger.log(`Escrow released (server) for job ${jobId} | sig: ${sig}`);
       await this.escrowRepository.update({ jobId }, { status: EscrowStatus.RELEASED, txSignature: sig });
-      void this.publisherService.publish(MessagePattern.JOB_COMPLETED, { jobId, txSignature: sig });
       const releasedRecord = await this.escrowRepository.findOne({ where: { jobId } });
-      void this.publisherService.publish(MessagePattern.ESCROW_RELEASED, { jobId, freelancerId: releasedRecord?.freelancerId ?? null, amountLamports: releasedRecord?.amountLamports ?? null });
+      this.safePublish(MessagePattern.JOB_COMPLETED, { jobId, txSignature: sig, amountLamports: releasedRecord?.amountLamports ?? null });
+      this.safePublish(MessagePattern.ESCROW_RELEASED, { jobId, freelancerId: releasedRecord?.freelancerId ?? null, amountLamports: releasedRecord?.amountLamports ?? null });
       return { txSignature: sig };
     }
 
@@ -699,8 +705,8 @@ export class EscrowService {
       },
       ['jobId'],
     );
-    void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: false });
-    void this.publisherService.publish(MessagePattern.ESCROW_REFUNDED, { jobId, clientId: onChain.client.toBase58(), amountLamports: onChain.amount.toString() });
+    this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: false });
+    this.safePublish(MessagePattern.ESCROW_REFUNDED, { jobId, clientId: onChain.client.toBase58(), amountLamports: onChain.amount.toString() });
 
     return { txSignature: sig };
   }
@@ -786,11 +792,12 @@ export class EscrowService {
     );
 
     if (status === EscrowStatus.FUNDED) {
-      void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: true });
+      this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: true });
     } else if (status === EscrowStatus.REFUNDED) {
-      void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: false });
+      this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: false });
     } else if (status === EscrowStatus.RELEASED) {
-      void this.publisherService.publish(MessagePattern.JOB_COMPLETED, { jobId, txSignature });
+      const record = await this.escrowRepository.findOne({ where: { jobId } });
+      this.safePublish(MessagePattern.JOB_COMPLETED, { jobId, txSignature, amountLamports: record?.amountLamports ?? null });
     }
 
     const record = await this.escrowRepository.findOne({ where: { jobId } });
@@ -804,7 +811,7 @@ export class EscrowService {
     const active = await this.milestoneRepository.count({
       where: { jobId, status: In([MilestoneStatus.FUNDED, MilestoneStatus.LOCKED]) },
     });
-    void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: active > 0 });
+    this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId, isActive: active > 0 });
   }
 
   // ─── Milestone CRUD ──────────────────────────────────────────────────────
@@ -893,7 +900,7 @@ export class EscrowService {
         { id: milestoneId },
         { status: MilestoneStatus.FUNDED, clientId, clientWallet, escrowPda: escrowPda.toBase58(), vaultPda: vaultPda.toBase58(), txSignature: sig },
       );
-      void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId: milestone.jobId, isActive: true });
+      this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId: milestone.jobId, isActive: true });
       return { txSignature: sig, escrowPda: escrowPda.toBase58(), vaultPda: vaultPda.toBase58() };
     }
 
@@ -1158,7 +1165,7 @@ export class EscrowService {
     );
 
     if (newStatus === MilestoneStatus.FUNDED) {
-      void this.publisherService.publish(MessagePattern.JOB_SET_ACTIVE, { jobId: milestone.jobId, isActive: true });
+      this.safePublish(MessagePattern.JOB_SET_ACTIVE, { jobId: milestone.jobId, isActive: true });
     } else if (newStatus === MilestoneStatus.REFUNDED) {
       await this.updateJobActiveFromMilestones(milestone.jobId);
     }

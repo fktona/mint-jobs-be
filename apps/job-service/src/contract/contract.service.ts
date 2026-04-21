@@ -1,6 +1,6 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, In } from 'typeorm';
+import { Repository, In, IsNull } from 'typeorm';
 import { createHash } from 'crypto';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { ConfigService } from '@mintjobs/config';
@@ -282,7 +282,7 @@ export class ContractService {
     applicantId: string,
   ): Promise<Array<Contract & { job: Job | null; progress: ContractProgress }>> {
     const contracts = await this.contractRepository.find({
-      where: { applicantId },
+      where: { applicantId, deletedAt: IsNull() },
       order: { createdAt: 'DESC' },
     });
 
@@ -446,7 +446,7 @@ export class ContractService {
    * Triggered by JOB_COMPLETED event from escrow-service after escrow release.
    * Looks up the contract by jobId and generates the completion certificate.
    */
-  async completeByJobId(jobId: string): Promise<void> {
+  async completeByJobId(jobId: string, amountLamports: number | null = null): Promise<void> {
     const contract = await this.contractRepository.findOne({ where: { jobId } });
     if (!contract) {
       this.logger.warn(`JOB_COMPLETED received but no contract found for job ${jobId}`);
@@ -459,6 +459,8 @@ export class ContractService {
 
     const job = await this.jobRepository.findOne({ where: { id: jobId } });
     const completedAt = new Date().toISOString();
+    // Convert lamports → SOL (1 SOL = 1_000_000_000 lamports)
+    const totalAmount = amountLamports != null ? amountLamports / 1_000_000_000 : 0;
 
     await this.generateCompletionCertificate({
       contractId: contract.id,
@@ -471,7 +473,7 @@ export class ContractService {
       originalContractDate: contract.createdAt.toISOString(),
       startDate: job?.startDate ? String(job.startDate) : completedAt,
       endDate: completedAt,
-      totalAmount: 0, // escrow amount not available here; add if needed
+      totalAmount,
       currency: 'SOL',
       paymentType: job?.paymentType ?? 'fixed',
     });

@@ -34,6 +34,7 @@ import { PrivyGuard, PrivyUser } from '@mintjobs/privy';
 import { PrivyService } from '@mintjobs/privy';
 import { ConfigService } from '@mintjobs/config';
 import { LoggerService } from '@mintjobs/logger';
+import { timingSafeEqual } from 'crypto';
 
 class FundEscrowDto {
   @ApiProperty({
@@ -149,7 +150,16 @@ export class EscrowController {
   /** Validate admin-token header for authority-only operations */
   private requireAdminToken(adminToken: string | undefined): void {
     const expected = this.configService.admin.adminToken;
-    if (!adminToken || adminToken !== expected) {
+    if (!adminToken || !expected) {
+      throw new UnauthorizedException('Admin token required for this operation');
+    }
+    try {
+      const a = Buffer.from(adminToken);
+      const b = Buffer.from(expected);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        throw new UnauthorizedException('Admin token required for this operation');
+      }
+    } catch {
       throw new UnauthorizedException('Admin token required for this operation');
     }
   }
@@ -677,6 +687,8 @@ class WithdrawFeesDto {
 
 @ApiTags('escrow')
 @Controller('escrow/fees')
+@UseGuards(PrivyGuard)
+@ApiBearerAuth('JWT-auth')
 export class PlatformFeeController {
   constructor(
     private readonly requestResponseService: RequestResponseService,
@@ -685,7 +697,16 @@ export class PlatformFeeController {
 
   private requireAdminToken(adminToken: string | undefined): void {
     const expected = this.configService.admin.adminToken;
-    if (!adminToken || adminToken !== expected) {
+    if (!adminToken || !expected) {
+      throw new UnauthorizedException('Admin token required for this operation');
+    }
+    try {
+      const a = Buffer.from(adminToken);
+      const b = Buffer.from(expected);
+      if (a.length !== b.length || !timingSafeEqual(a, b)) {
+        throw new UnauthorizedException('Admin token required for this operation');
+      }
+    } catch {
       throw new UnauthorizedException('Admin token required for this operation');
     }
   }

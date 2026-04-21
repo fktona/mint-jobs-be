@@ -42,10 +42,12 @@ export class MessagingService implements OnModuleInit, OnModuleDestroy {
         setup: async (channel: Channel) => {
           // Set prefetch count
           await channel.prefetch(config.prefetchCount);
-          // Assert exchange
-          await channel.assertExchange(config.exchange, 'topic', {
-            durable: true,
-          });
+          // Assert main exchange
+          await channel.assertExchange(config.exchange, 'topic', { durable: true });
+          // Assert dead-letter exchange + queue so failed messages are retained
+          await channel.assertExchange('mintjobs.dlx', 'fanout', { durable: true });
+          await channel.assertQueue('mintjobs.dlq', { durable: true });
+          await channel.bindQueue('mintjobs.dlq', 'mintjobs.dlx', '#');
           this.logger.log('RabbitMQ exchange asserted and prefetch set');
         },
       });

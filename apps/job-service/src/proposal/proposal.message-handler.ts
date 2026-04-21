@@ -132,8 +132,8 @@ export class ProposalMessageHandler implements OnModuleInit {
 
   private async handleGetByJob(event: any) {
     try {
-      const { jobId, ...filter } = event.data as any;
-      const result = await this.proposalService.findByJob(jobId, filter);
+      const { jobId, callerId, ...filter } = event.data as any;
+      const result = await this.proposalService.findByJob(jobId, callerId, filter);
       await this.requestResponseService.respond(
         event.requestId,
         MessagePattern.PROPOSAL_GET_BY_JOB_RESPONSE,
@@ -176,8 +176,8 @@ export class ProposalMessageHandler implements OnModuleInit {
 
   private async handleGetOne(event: any) {
     try {
-      const { proposalId } = event.data as any;
-      const proposal = await this.proposalService.findById(proposalId);
+      const { proposalId, callerId } = event.data as any;
+      const proposal = await this.proposalService.findById(proposalId, callerId);
       await this.requestResponseService.respond(
         event.requestId,
         MessagePattern.PROPOSAL_GET_ONE_RESPONSE,
@@ -297,8 +297,8 @@ export class ProposalMessageHandler implements OnModuleInit {
 
   private async handleCountByJob(event: any) {
     try {
-      const { jobId } = event.data as any;
-      const result = await this.proposalService.countByJob(jobId);
+      const { jobId, callerId } = event.data as any;
+      const result = await this.proposalService.countByJob(jobId, callerId);
       await this.requestResponseService.respond(
         event.requestId,
         MessagePattern.PROPOSAL_COUNT_BY_JOB_RESPONSE,

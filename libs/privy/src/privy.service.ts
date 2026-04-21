@@ -78,8 +78,8 @@ export class PrivyService {
         }
       }
       
-      // For other errors, return generic message
-      throw new UnauthorizedException(error?.message || 'Invalid access token');
+      // Never leak internal SDK error details to the caller
+      throw new UnauthorizedException('Invalid access token');
     }
   }
 
@@ -149,7 +149,6 @@ export class PrivyService {
     try {
       const user = await this.privyClient.users()._get(userId);
       if (!user) throw new UnauthorizedException('User not found');
-      console.log('user', user);
 
       const linkedAccounts = (user as any).linked_accounts || [];
       return linkedAccounts
@@ -178,7 +177,6 @@ export class PrivyService {
     base64Tx: string,
     userJwt: string,
   ): Promise<string> {
-    console.log('authorizationKey' , this.authorizationKey);
     const result = await (this.privyClient.wallets() as any)
       .solana()
       .signTransaction(walletId, {
