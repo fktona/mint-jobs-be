@@ -12,6 +12,7 @@ import {
 import { Logger, Inject, forwardRef } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { PrivyService } from '@mintjobs/privy';
+import { CORS_ORIGINS } from '@mintjobs/constants';
 import { ChatService } from './chat.service';
 import { Conversation } from './entities/conversation.entity';
 import { Message } from './entities/message.entity';
@@ -27,7 +28,7 @@ interface MarkReadPayload {
 
 @WebSocketGateway({
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(',') ?? '*',
+    origin: CORS_ORIGINS,
     credentials: true,
   },
   transports: ['websocket', 'polling'],

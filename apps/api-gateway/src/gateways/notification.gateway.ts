@@ -8,14 +8,12 @@ import {
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { PrivyService } from '@mintjobs/privy';
-
-const _notifCorsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
-const _notifCorsOrigin = _notifCorsOrigins?.length ? _notifCorsOrigins : process.env.NODE_ENV === 'production' ? false : true;
+import { CORS_ORIGINS } from '@mintjobs/constants';
 
 @WebSocketGateway({
   namespace: '/ws/notifications',
   cors: {
-    origin: _notifCorsOrigin,
+    origin: CORS_ORIGINS,
     credentials: true,
   },
   transports: ['websocket', 'polling'],

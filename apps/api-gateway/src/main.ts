@@ -7,6 +7,7 @@ import { ConfigService } from '@mintjobs/config';
 import { HttpExceptionFilter } from '@mintjobs/filters';
 import { LoggingInterceptor, TransformInterceptor } from '@mintjobs/interceptors';
 import { ValidationPipe as CustomValidationPipe } from '@mintjobs/common';
+import { CORS_ORIGINS } from '@mintjobs/constants';
 import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
@@ -14,9 +15,8 @@ async function bootstrap() {
   app.useWebSocketAdapter(new IoAdapter(app));
   const configService = app.get(ConfigService);
 
-  const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
   app.enableCors({
-    origin: corsOrigins,
+    origin: CORS_ORIGINS,
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'admin-token', 'x-correlation-id'],

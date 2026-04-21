@@ -12,16 +12,13 @@ import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { PrivyService } from '@mintjobs/privy';
 import { RequestResponseService } from '@mintjobs/messaging';
-import { MessagePattern, QueueName } from '@mintjobs/constants';
+import { CORS_ORIGINS, MessagePattern, QueueName } from '@mintjobs/constants';
 import { v4 as uuidv4 } from 'uuid';
-
-const _chatCorsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
-const _chatCorsOrigin = _chatCorsOrigins?.length ? _chatCorsOrigins : process.env.NODE_ENV === 'production' ? false : true;
 
 @WebSocketGateway({
   namespace: '/ws/chat',
   cors: {
-    origin: _chatCorsOrigin,
+    origin: CORS_ORIGINS,
     credentials: true,
   },
   transports: ['websocket', 'polling'],

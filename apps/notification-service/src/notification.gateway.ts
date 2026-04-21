@@ -8,11 +8,12 @@ import {
 import { Logger } from '@nestjs/common';
 import { Server, Socket } from 'socket.io';
 import { PrivyService } from '@mintjobs/privy';
+import { CORS_ORIGINS } from '@mintjobs/constants';
 import { Notification } from './entities/notification.entity';
 
 @WebSocketGateway({
   cors: {
-    origin: process.env.CORS_ORIGIN?.split(',') ?? '*',
+    origin: CORS_ORIGINS,
     credentials: true,
   },
   transports: ['websocket', 'polling'],
