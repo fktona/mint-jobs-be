@@ -16,7 +16,7 @@ async function bootstrap() {
 
   const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
   app.enableCors({
-    origin: corsOrigins?.length ? corsOrigins : process.env.NODE_ENV === 'production' ? false : true,
+    origin: corsOrigins,
     credentials: true,
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'admin-token', 'x-correlation-id'],
