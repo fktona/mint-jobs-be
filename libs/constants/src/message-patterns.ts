@@ -144,6 +144,10 @@ export enum MessagePattern {
   ONCHAIN_CONTRACT_GET = 'onchain.contract.get',
   ONCHAIN_CONTRACT_GET_RESPONSE = 'onchain.contract.get.response',
 
+  // Fire-and-forget result callbacks (Escrow -> Contract queue, no gateway.response.queue)
+  ONCHAIN_CONTRACT_CREATE_RESULT = 'onchain.contract.create.result',
+  ONCHAIN_CONTRACT_COMPLETE_RESULT = 'onchain.contract.complete.result',
+
   // Proposal hired event (fire-and-forget, no response pattern)
   PROPOSAL_HIRED = 'proposal.hired',
 

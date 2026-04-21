@@ -4,8 +4,8 @@ import { Repository, In } from 'typeorm';
 import { createHash } from 'crypto';
 import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 import { ConfigService } from '@mintjobs/config';
-import { RequestResponseService } from '@mintjobs/messaging';
-import { MessagePattern, QueueName } from '@mintjobs/constants';
+import { PublisherService } from '@mintjobs/messaging';
+import { MessagePattern } from '@mintjobs/constants';
 import { Contract, ContractStatus, ContractProgress, deriveProgress } from './entities/contract.entity';
 import { Job, PaymentType } from '../entities/job.entity';
 import { PdfHelper } from './pdf.helper';
@@ -98,7 +98,7 @@ export class ContractService {
     private readonly jobRepository: Repository<Job>,
     private readonly configService: ConfigService,
     private readonly pinataService: PinataService,
-    private readonly requestResponseService: RequestResponseService,
+    private readonly publisherService: PublisherService,
   ) {
     const s3Config = this.configService.s3;
     this.bucket = s3Config.bucket;
@@ -211,32 +211,7 @@ export class ContractService {
         this.logger.warn(`Pinata metadata upload failed for contract ${contract.id}`, err);
       }
 
-      // 6. Create on-chain contract (via escrow-service)
-      let onchainTxSignature: string | undefined;
-      let contractPda: string | undefined;
-      if (ipfsMetadataUrl && data.clientWallet && data.freelancerWallet) {
-        try {
-          const onchainResult = await this.requestResponseService.request<any, { txSignature: string; contractPda: string }>(
-            MessagePattern.ONCHAIN_CONTRACT_CREATE,
-            {
-              jobId: data.jobId,
-              clientWallet: data.clientWallet,
-              freelancerWallet: data.freelancerWallet,
-              metadataUri: ipfsMetadataUrl,
-              pdfHash,
-            },
-            MessagePattern.ONCHAIN_CONTRACT_CREATE_RESPONSE,
-            QueueName.ESCROW_QUEUE,
-          );
-          onchainTxSignature = onchainResult.txSignature;
-          contractPda = onchainResult.contractPda;
-          this.logger.log(`On-chain contract created for ${contract.id} | PDA: ${contractPda} | sig: ${onchainTxSignature}`);
-        } catch (err) {
-          this.logger.warn(`On-chain contract creation failed for ${contract.id} — contract saved without on-chain proof`, err);
-        }
-      }
-
-      // 7. Update contract record
+      // 6. Save contract with IPFS data — on-chain creation happens async
       contract.status = ContractStatus.GENERATED;
       contract.contractUrl = contractUrl;
       contract.ipfsPdfCid = ipfsPdfCid;
@@ -244,11 +219,27 @@ export class ContractService {
       contract.ipfsMetadataCid = ipfsMetadataCid;
       contract.ipfsMetadataUrl = ipfsMetadataUrl;
       contract.pdfHash = pdfHash;
-      contract.onchainTxSignature = onchainTxSignature;
-      contract.contractPda = contractPda;
       contract.clientWallet = data.clientWallet ?? undefined;
       contract.freelancerWallet = data.freelancerWallet ?? undefined;
-      return await this.contractRepository.save(contract);
+      const saved = await this.contractRepository.save(contract);
+
+      // 7. Fire-and-forget on-chain creation — result comes back via ONCHAIN_CONTRACT_CREATE_RESULT
+      if (ipfsMetadataUrl && data.clientWallet && data.freelancerWallet) {
+        try {
+          await this.publisherService.publish(MessagePattern.ONCHAIN_CONTRACT_CREATE, {
+            contractId: contract.id,
+            jobId: data.jobId,
+            clientWallet: data.clientWallet,
+            freelancerWallet: data.freelancerWallet,
+            metadataUri: ipfsMetadataUrl,
+            pdfHash,
+          });
+        } catch (err) {
+          this.logger.warn(`Failed to publish ONCHAIN_CONTRACT_CREATE for ${contract.id}`, err);
+        }
+      }
+
+      return saved;
     } catch (error) {
       this.logger.error(
         `Failed to generate contract for proposal ${data.proposalId}`,
@@ -258,6 +249,21 @@ export class ContractService {
       contract.failureReason = (error as Error)?.message ?? 'Unknown error';
       return await this.contractRepository.save(contract);
     }
+  }
+
+  async applyOnChainCreateResult(contractId: string, txSignature: string, contractPda: string): Promise<void> {
+    await this.contractRepository.update(contractId, {
+      onchainTxSignature: txSignature,
+      contractPda,
+    });
+    this.logger.log(`On-chain contract created for ${contractId} | PDA: ${contractPda} | sig: ${txSignature}`);
+  }
+
+  async applyOnChainCompleteResult(contractId: string, txSignature: string): Promise<void> {
+    await this.contractRepository.update(contractId, {
+      completionOnchainTxSignature: txSignature,
+    });
+    this.logger.log(`On-chain contract completed for ${contractId} | sig: ${txSignature}`);
   }
 
   async findByProposalId(proposalId: string): Promise<Contract & { job: Job | null; progress: ContractProgress }> {
@@ -406,27 +412,6 @@ export class ContractService {
         this.logger.warn(`Pinata completion metadata upload failed for ${data.contractId}`, err);
       }
 
-      // Mark contract as completed on-chain
-      let completionOnchainTxSignature: string | undefined;
-      if (completionMetadataUrl && contract.jobId) {
-        try {
-          const onchainResult = await this.requestResponseService.request<any, { txSignature: string }>(
-            MessagePattern.ONCHAIN_CONTRACT_COMPLETE,
-            {
-              jobId: contract.jobId,
-              completionUri: completionMetadataUrl,
-              completionPdfHash,
-            },
-            MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESPONSE,
-            QueueName.ESCROW_QUEUE,
-          );
-          completionOnchainTxSignature = onchainResult.txSignature;
-          this.logger.log(`On-chain contract completed for ${data.contractId} | sig: ${completionOnchainTxSignature}`);
-        } catch (err) {
-          this.logger.warn(`On-chain contract completion failed for ${data.contractId}`, err);
-        }
-      }
-
       contract.status = ContractStatus.COMPLETED;
       contract.completionUrl = completionUrl;
       contract.completedAt = new Date(data.completedAt);
@@ -434,8 +419,23 @@ export class ContractService {
       contract.completionIpfsPdfCid = completionIpfsPdfCid;
       contract.completionIpfsMetadataUrl = completionMetadataUrl;
       contract.completionPdfHash = completionPdfHash;
-      contract.completionOnchainTxSignature = completionOnchainTxSignature;
-      return await this.contractRepository.save(contract);
+      const completedContract = await this.contractRepository.save(contract);
+
+      // Fire-and-forget on-chain completion — result comes back via ONCHAIN_CONTRACT_COMPLETE_RESULT
+      if (completionMetadataUrl && contract.jobId) {
+        try {
+          await this.publisherService.publish(MessagePattern.ONCHAIN_CONTRACT_COMPLETE, {
+            contractId: contract.id,
+            jobId: contract.jobId,
+            completionUri: completionMetadataUrl,
+            completionPdfHash,
+          });
+        } catch (err) {
+          this.logger.warn(`Failed to publish ONCHAIN_CONTRACT_COMPLETE for ${contract.id}`, err);
+        }
+      }
+
+      return completedContract;
     } catch (error) {
       this.logger.error(`Failed to generate completion certificate for contract ${data.contractId}`, error);
       throw error;

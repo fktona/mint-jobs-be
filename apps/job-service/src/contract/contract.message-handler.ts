@@ -19,6 +19,8 @@ export class ContractMessageHandler implements OnModuleInit {
       MessagePattern.CONTRACT_GET_BY_PROPOSAL,
       MessagePattern.CONTRACT_GET_ONE,
       MessagePattern.CONTRACT_GET_MY,
+      MessagePattern.ONCHAIN_CONTRACT_CREATE_RESULT,
+      MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESULT,
     ]);
 
     // Also subscribe to JOB_COMPLETED (fan-out — escrow-service publishes it)
@@ -42,10 +44,17 @@ export class ContractMessageHandler implements OnModuleInit {
       MessagePattern.CONTRACT_GET_MY,
       this.handleGetMy.bind(this),
     );
-
     this.consumerService.registerHandler(
       MessagePattern.JOB_COMPLETED,
       this.handleJobCompleted.bind(this),
+    );
+    this.consumerService.registerHandler(
+      MessagePattern.ONCHAIN_CONTRACT_CREATE_RESULT,
+      this.handleOnChainCreateResult.bind(this),
+    );
+    this.consumerService.registerHandler(
+      MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESULT,
+      this.handleOnChainCompleteResult.bind(this),
     );
 
     this.logger.log('Contract message handlers registered');
@@ -145,6 +154,34 @@ export class ContractMessageHandler implements OnModuleInit {
         false,
         { message: error.message || 'Failed to get contracts', statusCode: error.status || 500 },
       );
+    }
+  }
+
+  private async handleOnChainCreateResult(event: any): Promise<void> {
+    const { contractId, success, txSignature, contractPda, error } = event.data ?? {};
+    if (!contractId) return;
+    if (!success) {
+      this.logger.warn(`On-chain contract creation failed for ${contractId}: ${error}`);
+      return;
+    }
+    try {
+      await this.contractService.applyOnChainCreateResult(contractId, txSignature, contractPda);
+    } catch (err) {
+      this.logger.error(`Failed to apply on-chain create result for ${contractId}`, err);
+    }
+  }
+
+  private async handleOnChainCompleteResult(event: any): Promise<void> {
+    const { contractId, success, txSignature, error } = event.data ?? {};
+    if (!contractId) return;
+    if (!success) {
+      this.logger.warn(`On-chain contract completion failed for ${contractId}: ${error}`);
+      return;
+    }
+    try {
+      await this.contractService.applyOnChainCompleteResult(contractId, txSignature);
+    } catch (err) {
+      this.logger.error(`Failed to apply on-chain complete result for ${contractId}`, err);
     }
   }
 }

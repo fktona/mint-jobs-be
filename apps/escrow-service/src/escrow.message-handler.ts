@@ -1,5 +1,5 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { ConsumerService, RequestResponseService } from '@mintjobs/messaging';
+import { ConsumerService, RequestResponseService, PublisherService } from '@mintjobs/messaging';
 import { MessagePattern, QueueName } from '@mintjobs/constants';
 import { PrivyService } from '@mintjobs/privy';
 import { EscrowService } from './escrow.service';
@@ -11,6 +11,7 @@ export class EscrowMessageHandler implements OnModuleInit {
   constructor(
     private readonly consumerService: ConsumerService,
     private readonly requestResponseService: RequestResponseService,
+    private readonly publisherService: PublisherService,
     private readonly escrowService: EscrowService,
     private readonly privyService: PrivyService,
   ) {}
@@ -416,26 +417,65 @@ export class EscrowMessageHandler implements OnModuleInit {
   }
 
   private async handleCompleteOnChainContract(event: any): Promise<void> {
+    const { contractId, jobId, completionUri, completionPdfHash } = event.data as any;
     try {
-      const { jobId, completionUri, completionPdfHash } = event.data as any;
       const result = await this.escrowService.completeOnChainContract(jobId, completionUri, completionPdfHash);
-      await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESPONSE, result, true);
+      if (event.requestId) {
+        await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESPONSE, result, true);
+      }
+      if (contractId) {
+        await this.publisherService.publish(MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESULT, {
+          contractId,
+          txSignature: result.txSignature,
+          success: true,
+        });
+      }
     } catch (err) {
       this.logger.error('Error completing on-chain contract', err);
-      await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESPONSE, null, false,
-        { message: err.message || 'Failed to complete on-chain contract', statusCode: err.status || 500 });
+      if (event.requestId) {
+        await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESPONSE, null, false,
+          { message: err.message || 'Failed to complete on-chain contract', statusCode: err.status || 500 });
+      }
+      if (contractId) {
+        await this.publisherService.publish(MessagePattern.ONCHAIN_CONTRACT_COMPLETE_RESULT, {
+          contractId,
+          success: false,
+          error: err.message,
+        });
+      }
     }
   }
 
   private async handleCreateOnChainContract(event: any): Promise<void> {
+    const { contractId, jobId, clientWallet, freelancerWallet, metadataUri, pdfHash } = event.data as any;
     try {
-      const { jobId, clientWallet, freelancerWallet, metadataUri, pdfHash } = event.data as any;
       const result = await this.escrowService.createOnChainContract(jobId, clientWallet, freelancerWallet, metadataUri, pdfHash);
-      await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_CREATE_RESPONSE, result, true);
+      // If called via gateway RPC (requestId present), respond normally
+      if (event.requestId) {
+        await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_CREATE_RESPONSE, result, true);
+      }
+      // If called fire-and-forget from job-service (contractId present), publish result back
+      if (contractId) {
+        await this.publisherService.publish(MessagePattern.ONCHAIN_CONTRACT_CREATE_RESULT, {
+          contractId,
+          txSignature: result.txSignature,
+          contractPda: result.contractPda,
+          success: true,
+        });
+      }
     } catch (err) {
       this.logger.error('Error creating on-chain contract', err);
-      await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_CREATE_RESPONSE, null, false,
-        { message: err.message || 'Failed to create on-chain contract', statusCode: err.status || 500 });
+      if (event.requestId) {
+        await this.requestResponseService.respond(event.requestId, MessagePattern.ONCHAIN_CONTRACT_CREATE_RESPONSE, null, false,
+          { message: err.message || 'Failed to create on-chain contract', statusCode: err.status || 500 });
+      }
+      if (contractId) {
+        await this.publisherService.publish(MessagePattern.ONCHAIN_CONTRACT_CREATE_RESULT, {
+          contractId,
+          success: false,
+          error: err.message,
+        });
+      }
     }
   }
 
