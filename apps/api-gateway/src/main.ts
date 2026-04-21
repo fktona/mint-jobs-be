@@ -14,13 +14,13 @@ async function bootstrap() {
   app.useWebSocketAdapter(new IoAdapter(app));
   const configService = app.get(ConfigService);
 
-  // Security
-  app.use(helmet());
   const corsOrigins = process.env.CORS_ORIGIN?.split(',').map((o) => o.trim()).filter(Boolean);
   app.enableCors({
     origin: corsOrigins?.length ? corsOrigins : process.env.NODE_ENV === 'production' ? false : true,
     credentials: true,
   });
+  // helmet after enableCors — disable crossOriginResourcePolicy so CORS headers aren't overridden
+  app.use(helmet({ crossOriginResourcePolicy: false }));
 
   // Global prefix
   app.setGlobalPrefix(configService.app.apiPrefix);
