@@ -18,6 +18,8 @@ async function bootstrap() {
   app.enableCors({
     origin: corsOrigins?.length ? corsOrigins : process.env.NODE_ENV === 'production' ? false : true,
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    optionsSuccessStatus: 204,
   });
   // helmet after enableCors — disable crossOriginResourcePolicy so CORS headers aren't overridden
   app.use(helmet({ crossOriginResourcePolicy: false }));
