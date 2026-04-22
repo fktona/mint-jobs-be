@@ -1,6 +1,7 @@
 export const CORS_ORIGINS = [
   'http://localhost:3000',
   'http://localhost:3001',
+  'https://localhost:3001',
   'https://mintjobs.fun',
   'https://www.mintjobs.fun',
   'https://client.mintjobs.fun',

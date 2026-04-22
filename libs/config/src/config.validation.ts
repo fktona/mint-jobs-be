@@ -202,6 +202,14 @@ class EnvironmentVariables {
   @IsString()
   SOLANA_PROGRAM_ID?: string;
 
+  @IsOptional()
+  @IsEnum({ mainnet: 'mainnet', devnet: 'devnet' })
+  SOLANA_NETWORK?: string;
+
+  @IsOptional()
+  @IsString()
+  LAUNCHPAD_PLATFORM_ID?: string;
+
   // Pinata / IPFS
   @IsOptional()
   @IsString()
@@ -289,6 +297,8 @@ export function validateConfig(config: Record<string, unknown>) {
       rpcUrl: validatedConfig.SOLANA_RPC_URL,
       authorityKeypair: validatedConfig.SOLANA_AUTHORITY_KEYPAIR,
       programId: validatedConfig.SOLANA_PROGRAM_ID || '',
+      network: (validatedConfig.SOLANA_NETWORK === 'mainnet' ? 'mainnet' : 'devnet') as 'mainnet' | 'devnet',
+      launchpadPlatformId: validatedConfig.LAUNCHPAD_PLATFORM_ID || '',
     },
     pinata: {
       jwt: validatedConfig.PINATA_JWT || '',

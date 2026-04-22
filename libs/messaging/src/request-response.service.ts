@@ -238,6 +238,18 @@ export class RequestResponseService implements OnModuleInit {
         MessagePattern.NOTIFICATION_MARK_READ_RESPONSE,
         MessagePattern.NOTIFICATION_MARK_ALL_READ_RESPONSE,
         MessagePattern.NOTIFICATION_UNREAD_COUNT_RESPONSE,
+        MessagePattern.LAUNCHPAD_CONVERSATIONS_RESPONSE,
+        MessagePattern.FOLLOW_RESPONSE,
+        MessagePattern.UNFOLLOW_RESPONSE,
+        MessagePattern.FOLLOW_CHECK_RESPONSE,
+        MessagePattern.DEFI_PROFILE_UPSERT_RESPONSE,
+        MessagePattern.DEFI_PROFILE_GET_RESPONSE,
+        MessagePattern.TOKEN_CREATE_RESPONSE,
+        MessagePattern.TOKEN_CONFIRM_RESPONSE,
+        MessagePattern.TOKEN_INITIATE_RESPONSE,
+        MessagePattern.TOKEN_GET_MY_RESPONSE,
+        MessagePattern.TOKEN_GET_ONE_RESPONSE,
+        MessagePattern.TOKEN_GET_ALL_RESPONSE,
       ];
 
       for (const pattern of responsePatterns) {

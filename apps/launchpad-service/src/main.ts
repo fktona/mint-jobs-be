@@ -5,9 +5,11 @@ import { ConfigService } from '@mintjobs/config';
 import { HttpExceptionFilter } from '@mintjobs/filters';
 import { LoggingInterceptor } from '@mintjobs/interceptors';
 import { ValidationPipe as CustomValidationPipe } from '@mintjobs/common';
+import { IoAdapter } from '@nestjs/platform-socket.io';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  app.useWebSocketAdapter(new IoAdapter(app));
   const configService = app.get(ConfigService);
 
   // Global pipes
@@ -30,6 +32,7 @@ async function bootstrap() {
   await app.listen(port);
 
   console.log(`🚀 Launchpad Service running on: http://localhost:${port}`);
+  console.log(`💬 Launchpad Chat WebSocket: ws://localhost:${port}/ws/launchpad`);
 }
 
 bootstrap();

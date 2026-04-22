@@ -69,6 +69,8 @@ export interface SolanaConfig {
   rpcUrl: string;
   authorityKeypair: string;
   programId: string;
+  network: 'mainnet' | 'devnet';
+  launchpadPlatformId: string;
 }
 
 export interface PinataConfig {

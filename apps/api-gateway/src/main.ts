@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
 import helmet from 'helmet';
+import * as express from 'express';
 import { AppModule } from './app.module';
 import { ConfigService } from '@mintjobs/config';
 import { HttpExceptionFilter } from '@mintjobs/filters';
@@ -14,6 +15,10 @@ async function bootstrap() {
   const app = await NestFactory.create(AppModule);
   app.useWebSocketAdapter(new IoAdapter(app));
   const configService = app.get(ConfigService);
+
+  // Raise JSON body limit to 10 MB to accommodate base64-encoded token images
+  app.use(express.json({ limit: '10mb' }));
+  app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
   app.enableCors({
     origin: CORS_ORIGINS,

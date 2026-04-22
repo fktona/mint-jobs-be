@@ -13,6 +13,9 @@ import { ContractsController } from './contracts/contracts.controller';
 import { EscrowController, MilestoneController, PlatformFeeController } from './escrow/escrow.controller';
 import { ChatController } from './chat/chat.controller';
 import { NotificationsController } from './notifications/notifications.controller';
+import { LaunchpadController } from './launchpad/launchpad.controller';
+import { FollowController } from './launchpad/follow.controller';
+import { PublicLaunchpadController } from './launchpad/public-launchpad.controller';
 import { ChatGateway } from './gateways/chat.gateway';
 import { NotificationGateway } from './gateways/notification.gateway';
 import { GatewayPushHandler } from './gateways/gateway-push.handler';
@@ -24,7 +27,7 @@ import { GatewayPushHandler } from './gateways/gateway-push.handler';
     MessagingModule,
     PrivyModule,
   ],
-  controllers: [UsersController, JobsController, FreelancerProfileController, ProposalsController, ClientProfileController, AuthController, ContractsController, EscrowController, MilestoneController, PlatformFeeController, ChatController, NotificationsController],
+  controllers: [UsersController, JobsController, FreelancerProfileController, ProposalsController, ClientProfileController, AuthController, ContractsController, EscrowController, MilestoneController, PlatformFeeController, ChatController, NotificationsController, LaunchpadController, FollowController, PublicLaunchpadController],
   providers: [ChatGateway, NotificationGateway, GatewayPushHandler],
 })
 export class AppModule {}

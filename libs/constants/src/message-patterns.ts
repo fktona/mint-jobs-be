@@ -88,6 +88,44 @@ export enum MessagePattern {
   LAUNCHPAD_FUNDED = 'launchpad.funded',
   LAUNCHPAD_COMPLETED = 'launchpad.completed',
 
+  // Launchpad chat RPC requests (Gateway -> Launchpad Service)
+  LAUNCHPAD_CONVERSATIONS = 'launchpad.conversations',
+  LAUNCHPAD_CONVERSATIONS_RESPONSE = 'launchpad.conversations.response',
+
+  // Follow RPC requests (Gateway -> Launchpad Service)
+  FOLLOW = 'follow',
+  UNFOLLOW = 'unfollow',
+  FOLLOW_CHECK = 'follow.check',
+
+  // Follow RPC responses (Launchpad Service -> Gateway)
+  FOLLOW_RESPONSE = 'follow.response',
+  UNFOLLOW_RESPONSE = 'unfollow.response',
+  FOLLOW_CHECK_RESPONSE = 'follow.check.response',
+
+  // DeFi Profile RPC requests (Gateway -> Launchpad Service)
+  DEFI_PROFILE_UPSERT = 'defi.profile.upsert',
+  DEFI_PROFILE_GET = 'defi.profile.get',
+
+  // DeFi Profile RPC responses (Launchpad Service -> Gateway)
+  DEFI_PROFILE_UPSERT_RESPONSE = 'defi.profile.upsert.response',
+  DEFI_PROFILE_GET_RESPONSE = 'defi.profile.get.response',
+
+  // Token RPC requests (Gateway -> Launchpad Service)
+  TOKEN_CREATE = 'token.create',
+  TOKEN_CONFIRM = 'token.confirm',
+  TOKEN_INITIATE = 'token.initiate',
+  TOKEN_GET_MY = 'token.get.my',
+  TOKEN_GET_ONE = 'token.get.one',
+  TOKEN_GET_ALL = 'token.get.all',
+
+  // Token RPC responses (Launchpad Service -> Gateway)
+  TOKEN_CREATE_RESPONSE = 'token.create.response',
+  TOKEN_CONFIRM_RESPONSE = 'token.confirm.response',
+  TOKEN_INITIATE_RESPONSE = 'token.initiate.response',
+  TOKEN_GET_MY_RESPONSE = 'token.get.my.response',
+  TOKEN_GET_ONE_RESPONSE = 'token.get.one.response',
+  TOKEN_GET_ALL_RESPONSE = 'token.get.all.response',
+
   // Proposal RPC requests (Gateway -> Service)
   PROPOSAL_CREATE = 'proposal.create',
   PROPOSAL_GET_MY = 'proposal.get.my',
